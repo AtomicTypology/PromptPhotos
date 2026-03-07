@@ -1,0 +1,5 @@
+{
+  "name": "PromptStudio",
+  "description": "A structured image generation studio that automates prompt engineering, versioning, and style management using Gemini.",
+  "requestFramePermissions": []
+}

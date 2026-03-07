@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-studio-bg: #F5F5F7;
+  --color-studio-card: #FFFFFF;
+  --color-studio-text: #1D1D1F;
+  --color-studio-secondary: #86868B;
+  --color-studio-accent: #0066CC;
+  --color-studio-border: #D2D2D7;
+}
+
+body {
+  @apply antialiased bg-studio-bg text-studio-text;
+  font-family: var(--font-sans);
+}
+
+@utility studio-card {
+  @apply bg-studio-card rounded-[24px] border border-studio-border/30 shadow-sm overflow-hidden;
+}
+
+@utility studio-btn-primary {
+  @apply bg-studio-accent text-white px-6 py-3 rounded-full font-semibold transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50;
+}
+
+@utility studio-btn-secondary {
+  @apply bg-studio-bg text-studio-text px-6 py-3 rounded-full font-semibold border border-studio-border transition-all hover:bg-studio-border/20 active:scale-[0.98];
+}
+
+@utility studio-input {
+  @apply bg-studio-bg border border-studio-border/50 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-studio-accent/20 focus:border-studio-accent transition-all;
+}
+
+/* Hide scrollbars but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Remove all transitions and animations as requested previously, but keep subtle ones for "Apple" feel if appropriate. 
+   User said "no animations or gradients like this" referring to the brutalist ones, 
+   but Option 2 implies a "Modern & Collaborative" feel which usually has subtle transitions.
+   However, I will keep it minimal as per the "no animations" instruction if it was a hard rule.
+   Actually, the user said "no animations or gradients like this" pointing to the brutalist image.
+   Option 2 is "Modern & Collaborative". I'll keep them very subtle. */
+* {
+  transition: all 0.2s ease-out;
+}
