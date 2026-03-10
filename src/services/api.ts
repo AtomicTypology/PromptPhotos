@@ -77,14 +77,29 @@ export interface AuthUser {
   picture: string;
 }
 
+const handleResponse = async (res: Response) => {
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let errorData;
+    try {
+      errorData = JSON.parse(text);
+    } catch (e) {
+      errorData = { error: text || `Request failed with status ${res.status}` };
+    }
+    throw new Error(errorData.details || errorData.error || `Request failed with status ${res.status}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+};
+
 export const api = {
   getProjects: async (): Promise<ProjectSettings[]> => {
     const res = await fetch("/api/projects");
-    return res.json();
+    return handleResponse(res);
   },
   getProject: async (id: number): Promise<ProjectSettings> => {
     const res = await fetch(`/api/projects/${id}`);
-    return res.json();
+    return handleResponse(res);
   },
   createProject: async (data: { name: string; brief: string; global_style: string }): Promise<{ id: number }> => {
     const res = await fetch("/api/projects", {
@@ -92,18 +107,19 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   updateProject: async (id: number, data: { name: string; brief: string; global_style: string }): Promise<void> => {
-    await fetch(`/api/projects/${id}`, {
+    const res = await fetch(`/api/projects/${id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
+    await handleResponse(res);
   },
   getGenerations: async (projectId: number): Promise<Generation[]> => {
     const res = await fetch(`/api/generations?projectId=${projectId}`);
-    return res.json();
+    return handleResponse(res);
   },
   saveGeneration: async (data: Omit<Generation, "id" | "created_at">): Promise<{ id: number }> => {
     const res = await fetch("/api/generations", {
@@ -111,18 +127,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.details || errorData.error || `Failed to save generation: ${res.status}`);
-    }
-    return res.json();
+    return handleResponse(res);
   },
   deleteGeneration: async (id: number): Promise<void> => {
-    await fetch(`/api/generations/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/generations/${id}`, { method: "DELETE" });
+    await handleResponse(res);
   },
   getStyles: async (projectId: number): Promise<StyleTemplate[]> => {
     const res = await fetch(`/api/styles?projectId=${projectId}`);
-    return res.json();
+    return handleResponse(res);
   },
   saveStyle: async (data: Omit<StyleTemplate, "id" | "created_at">): Promise<{ id: number }> => {
     const res = await fetch("/api/styles", {
@@ -130,12 +143,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   // New Endpoints
   getPalettes: async (projectId: number): Promise<Palette[]> => {
     const res = await fetch(`/api/palettes?projectId=${projectId}`);
-    return res.json();
+    return handleResponse(res);
   },
   savePalette: async (data: { name: string; image_data: string; project_id?: number }): Promise<{ id: number }> => {
     const res = await fetch("/api/palettes", {
@@ -143,11 +156,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   getReferences: async (projectId: number): Promise<ReferenceImage[]> => {
     const res = await fetch(`/api/references?projectId=${projectId}`);
-    return res.json();
+    return handleResponse(res);
   },
   saveReference: async (data: { name: string; image_data: string; project_id?: number }): Promise<{ id: number }> => {
     const res = await fetch("/api/references", {
@@ -155,11 +168,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   getShowcase: async (projectId: number): Promise<ShowcaseItem[]> => {
     const res = await fetch(`/api/showcase?projectId=${projectId}`);
-    return res.json();
+    return handleResponse(res);
   },
   addToShowcase: async (data: { type: string; item_id: number; project_id: number }): Promise<{ id: number }> => {
     const res = await fetch("/api/showcase", {
@@ -167,14 +180,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   toggleStar: async (id: number): Promise<void> => {
-    await fetch(`/api/showcase/${id}/star`, { method: "POST" });
+    const res = await fetch(`/api/showcase/${id}/star`, { method: "POST" });
+    await handleResponse(res);
   },
   getComments: async (id: number): Promise<Comment[]> => {
     const res = await fetch(`/api/showcase/${id}/comments`);
-    return res.json();
+    return handleResponse(res);
   },
   addComment: async (id: number, data: { text: string; author: string }): Promise<{ id: number }> => {
     const res = await fetch(`/api/showcase/${id}/comments`, {
@@ -182,12 +196,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   // Prompt Library
   getLibrary: async (): Promise<PromptLibraryItem[]> => {
     const res = await fetch("/api/library");
-    return res.json();
+    return handleResponse(res);
   },
   saveLibraryItem: async (data: Omit<PromptLibraryItem, "id" | "created_at">): Promise<{ id: number }> => {
     const res = await fetch("/api/library", {
@@ -195,33 +209,35 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handleResponse(res);
   },
   importLibrary: async (items: Omit<PromptLibraryItem, "id" | "created_at">[]): Promise<void> => {
-    await fetch("/api/library/import", {
+    const res = await fetch("/api/library/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
     });
+    await handleResponse(res);
   },
   deleteLibraryItem: async (id: number): Promise<void> => {
-    await fetch(`/api/library/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/library/${id}`, { method: "DELETE" });
+    await handleResponse(res);
   },
   globalSearch: async (query: string): Promise<{ generations: any[]; library: any[]; projects: any[] }> => {
     const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-    return res.json();
+    return handleResponse(res);
   },
   getProjectStats: async (): Promise<any[]> => {
     const res = await fetch("/api/projects/stats");
-    return res.json();
+    return handleResponse(res);
   },
   rescueData: async (): Promise<any> => {
     const res = await fetch("/api/rescue");
-    return res.json();
+    return handleResponse(res);
   },
   exportWorkspace: async (): Promise<any> => {
     const res = await fetch("/api/export");
-    return res.json();
+    return handleResponse(res);
   },
   importWorkspace: async (data: any): Promise<void> => {
     const res = await fetch("/api/import", {
@@ -229,29 +245,30 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Import failed");
+    await handleResponse(res);
   },
   purgeServer: async (): Promise<void> => {
     const res = await fetch("/api/purge", { method: "POST" });
-    if (!res.ok) throw new Error("Purge failed");
+    await handleResponse(res);
   },
   getAuthUrl: async (): Promise<{ url: string }> => {
     const res = await fetch("/api/auth/url");
-    return res.json();
+    return handleResponse(res);
   },
   getMe: async (): Promise<AuthUser | null> => {
     const res = await fetch("/api/me");
-    return res.json();
+    return handleResponse(res);
   },
   logout: async (): Promise<void> => {
-    await fetch("/api/logout", { method: "POST" });
+    const res = await fetch("/api/logout", { method: "POST" });
+    await handleResponse(res);
   },
   syncToGCS: async (): Promise<void> => {
     const res = await fetch("/api/sync", { method: "POST" });
-    if (!res.ok) throw new Error("Sync failed");
+    await handleResponse(res);
   },
   restoreFromGCS: async (): Promise<void> => {
     const res = await fetch("/api/restore", { method: "POST" });
-    if (!res.ok) throw new Error("Restore failed");
+    await handleResponse(res);
   }
 };
