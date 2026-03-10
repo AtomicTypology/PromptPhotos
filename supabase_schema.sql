@@ -1,12 +1,23 @@
 -- Run this in your Supabase SQL Editor to set up your persistent database
 
+-- 0. Users Table
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT,
+    name TEXT,
+    picture TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 1. Generations Table
 CREATE TABLE IF NOT EXISTS generations (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     idea TEXT,
     prompt_json TEXT,
     image_data TEXT,
+    image_url TEXT,
     parent_id BIGINT,
     feedback TEXT,
     batch_id TEXT,
@@ -17,7 +28,8 @@ CREATE TABLE IF NOT EXISTS generations (
 -- 2. Styles Table
 CREATE TABLE IF NOT EXISTS styles (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     name TEXT,
     style_json TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -26,16 +38,19 @@ CREATE TABLE IF NOT EXISTS styles (
 -- 3. Palettes Table
 CREATE TABLE IF NOT EXISTS palettes (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     name TEXT,
     image_data TEXT,
+    image_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 4. References Table
 CREATE TABLE IF NOT EXISTS references_images (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     name TEXT,
     image_data TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -44,7 +59,8 @@ CREATE TABLE IF NOT EXISTS references_images (
 -- 5. Showcase Table
 CREATE TABLE IF NOT EXISTS showcase (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     type TEXT, -- 'generation', 'palette', 'reference'
     item_id BIGINT,
     starred BOOLEAN DEFAULT FALSE,
@@ -63,6 +79,7 @@ CREATE TABLE IF NOT EXISTS comments (
 -- 7. Project Settings Table
 CREATE TABLE IF NOT EXISTS project_settings (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id TEXT REFERENCES users(id),
     name TEXT,
     brief TEXT,
     global_style TEXT,
@@ -73,14 +90,10 @@ CREATE TABLE IF NOT EXISTS project_settings (
 -- 8. Prompt Library Table
 CREATE TABLE IF NOT EXISTS prompt_library (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    project_id BIGINT DEFAULT 1,
+    user_id TEXT REFERENCES users(id),
+    project_id BIGINT,
     category TEXT,
     title TEXT,
     prompt TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
--- Insert Default Project
-INSERT INTO project_settings (id, name, brief, global_style) 
-VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist')
-ON CONFLICT (id) DO NOTHING;

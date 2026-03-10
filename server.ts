@@ -24,11 +24,17 @@ const db = new Database("promptstudio.db");
 // Supabase Client (if configured)
 const supabaseUrl = process.env.SUPABASE_URL || "https://snwofoypavgrcpdpymlj.supabase.co";
 const supabaseKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNud29mb3lwYXZncmNwZHB5bWxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDg5NDgsImV4cCI6MjA4ODcyNDk0OH0.h2Swp87Sfuq_2sGLud4brsIhDwCj_I0TLkflVFJ5-JY";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 let supabase: any = null;
+let supabaseAdmin: any = null;
 
 if (supabaseUrl && supabaseKey && supabaseUrl.startsWith("http")) {
   try {
     supabase = createClient(supabaseUrl, supabaseKey);
+    if (supabaseServiceKey) {
+      supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    }
   } catch (err) {
     console.error("Supabase initialization failed:", err);
     supabase = null;
@@ -37,6 +43,9 @@ if (supabaseUrl && supabaseKey && supabaseUrl.startsWith("http")) {
 
 if (supabase) {
   console.log("Supabase (Persistent Postgres) configured.");
+  if (supabaseAdmin) {
+    console.log("Supabase Admin (Service Role) configured for storage.");
+  }
 } else {
   console.log("Using local SQLite (Ephemeral). Add SUPABASE_URL and SUPABASE_ANON_KEY for persistence.");
 }
@@ -128,6 +137,20 @@ db.exec(`
   VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist');
 `);
 
+// Add user_id and image_url columns to local DB for compatibility
+const tables = ['generations', 'styles', 'palettes', 'references_images', 'showcase', 'prompt_library', 'project_settings'];
+for (const table of tables) {
+  try {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`).run();
+  } catch (e) {}
+}
+try {
+  db.prepare("ALTER TABLE generations ADD COLUMN image_url TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE palettes ADD COLUMN image_url TEXT").run();
+} catch (e) {}
+
 try {
   db.prepare("ALTER TABLE palettes ADD COLUMN project_id INTEGER DEFAULT 1").run();
 } catch (e) {}
@@ -189,6 +212,32 @@ async function loadFromGCS(userId: string) {
   return JSON.parse(content.toString());
 }
 
+const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.session?.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+};
+
+async function uploadToSupabase(base64Data: string, bucketName: string, fileName: string) {
+  if (!supabaseAdmin) return null;
+  try {
+    const buffer = Buffer.from(base64Data.split(',')[1], 'base64');
+    const { data, error } = await supabaseAdmin.storage
+      .from(bucketName)
+      .upload(fileName, buffer, {
+        contentType: 'image/png',
+        upsert: true
+      });
+    if (error) throw error;
+    const { data: { publicUrl } } = supabaseAdmin.storage.from(bucketName).getPublicUrl(fileName);
+    return publicUrl;
+  } catch (error) {
+    console.error("Supabase Storage upload failed:", error);
+    return null;
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -245,6 +294,33 @@ async function startServer() {
         };
       }
 
+      // Multi-user initialization
+      if (supabase && payload?.sub) {
+        // 1. Upsert user
+        await supabase.from('users').upsert({
+          id: payload.sub,
+          email: payload.email,
+          name: payload.name,
+          picture: payload.picture
+        });
+
+        // 2. Ensure default project exists for this user
+        const { data: projects } = await supabase
+          .from('project_settings')
+          .select('id')
+          .eq('user_id', payload.sub)
+          .limit(1);
+
+        if (!projects || projects.length === 0) {
+          await supabase.from('project_settings').insert({
+            user_id: payload.sub,
+            name: 'Main Workspace',
+            brief: 'Your primary creative environment.',
+            global_style: 'Modern, Clean, Minimalist'
+          });
+        }
+      }
+
       res.send(`
         <html>
           <body>
@@ -286,28 +362,30 @@ async function startServer() {
   `);
 
   // Global Search
-  app.get("/api/search", (req, res) => {
+  app.get("/api/search", requireAuth, (req, res) => {
+    const userId = req.session.user.id;
     const query = `%${req.query.q || ''}%`;
     const results = {
       generations: db.prepare(`
         SELECT g.*, COALESCE(p.name, 'Unknown Project') as project_name 
         FROM generations g 
         LEFT JOIN project_settings p ON g.project_id = p.id 
-        WHERE g.idea LIKE ? OR g.prompt_json LIKE ?
-      `).all(query, query),
+        WHERE (g.idea LIKE ? OR g.prompt_json LIKE ?) AND g.user_id = ?
+      `).all(query, query, userId),
       library: db.prepare(`
         SELECT l.*, COALESCE(p.name, 'Unknown Project') as project_name 
         FROM prompt_library l 
         LEFT JOIN project_settings p ON l.project_id = p.id 
-        WHERE l.title LIKE ? OR l.prompt LIKE ?
-      `).all(query, query),
-      projects: db.prepare("SELECT * FROM project_settings WHERE name LIKE ? OR brief LIKE ?").all(query, query)
+        WHERE (l.title LIKE ? OR l.prompt LIKE ?) AND l.user_id = ?
+      `).all(query, query, userId),
+      projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id = ?").all(query, query, userId)
     };
     res.json(results);
   });
 
   // Project Stats
-  app.get("/api/projects/stats", async (req, res) => {
+  app.get("/api/projects/stats", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     if (supabase) {
       const { data: stats, error } = await supabase
         .from('project_settings')
@@ -317,12 +395,13 @@ async function startServer() {
           generations:generations(count),
           library:prompt_library(count),
           references:references_images(count)
-        `);
+        `)
+        .eq('user_id', userId);
       
       if (error) return res.status(500).json({ error: error.message });
       
       // Format Supabase response to match SQLite
-      const formattedStats = stats.map(s => ({
+      const formattedStats = stats.map((s: any) => ({
         id: s.id,
         name: s.name,
         generation_count: s.generations?.[0]?.count || 0,
@@ -336,45 +415,19 @@ async function startServer() {
       SELECT 
         p.id,
         p.name,
-        (SELECT COUNT(*) FROM generations WHERE project_id = p.id) as generation_count,
-        (SELECT COUNT(*) FROM prompt_library WHERE project_id = p.id) as library_count,
-        (SELECT COUNT(*) FROM references_images WHERE project_id = p.id) as reference_count
+        (SELECT COUNT(*) FROM generations WHERE project_id = p.id AND user_id = ?) as generation_count,
+        (SELECT COUNT(*) FROM prompt_library WHERE project_id = p.id AND user_id = ?) as library_count,
+        (SELECT COUNT(*) FROM references_images WHERE project_id = p.id AND user_id = ?) as reference_count
       FROM project_settings p
-    `).all();
+      WHERE p.user_id = ?
+    `).all(userId, userId, userId, userId);
     res.json(stats);
   });
 
   // API Routes
-  app.get("/api/rescue", (req, res) => {
-    try {
-      console.log("Starting Data Rescue operation...");
-      // Ensure Project 1 exists
-      db.prepare("INSERT OR IGNORE INTO project_settings (id, name, brief, global_style) VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist')").run();
-      
-      const counts = {
-        generations: db.prepare("UPDATE generations SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-        library: db.prepare("UPDATE prompt_library SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-        palettes: db.prepare("UPDATE palettes SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-        references: db.prepare("UPDATE references_images SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-        showcase: db.prepare("UPDATE showcase SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-        styles: db.prepare("UPDATE styles SET project_id = 1 WHERE project_id IS NULL OR project_id NOT IN (SELECT id FROM project_settings)").run().changes,
-      };
-      
-      const totals = {
-        generations: db.prepare("SELECT COUNT(*) as count FROM generations").get().count,
-        library: db.prepare("SELECT COUNT(*) as count FROM prompt_library").get().count,
-        projects: db.prepare("SELECT COUNT(*) as count FROM project_settings").get().count,
-      };
 
-      console.log("Rescue complete. Fixed:", counts, "Totals:", totals);
-      res.json({ success: true, fixed: counts, totals });
-    } catch (error) {
-      console.error("Rescue failed:", error);
-      res.status(500).json({ error: "Rescue operation failed" });
-    }
-  });
-
-  app.get("/api/generations", async (req, res) => {
+  app.get("/api/generations", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const projectId = parseInt(req.query.projectId as string) || 1;
     
     if (supabase) {
@@ -382,18 +435,25 @@ async function startServer() {
         .from('generations')
         .select('*')
         .eq('project_id', projectId)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false });
       
       if (error) return res.status(500).json({ error: error.message });
-      return res.json(data);
+      // Map image_url to image_data for frontend
+      const mapped = data.map((g: any) => ({
+        ...g,
+        image_data: g.image_url || g.image_data
+      }));
+      return res.json(mapped);
     }
 
-    const rows = db.prepare("SELECT * FROM generations WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
+    const rows = db.prepare("SELECT * FROM generations WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
     res.json(rows);
   });
 
-  app.post("/api/generations", async (req, res) => {
+  app.post("/api/generations", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const { idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references } = req.body;
       
       if (!image_data) {
@@ -401,13 +461,21 @@ async function startServer() {
         return res.status(400).json({ error: "Missing image_data" });
       }
 
+      let imageUrl = null;
+      if (image_data.startsWith('data:image')) {
+        const fileName = `${userId}/gen_${Date.now()}.png`;
+        imageUrl = await uploadToSupabase(image_data, 'promptphotos', fileName);
+      }
+
       if (supabase) {
         const { data, error } = await supabase
           .from('generations')
           .insert([{
+            user_id: userId,
             idea,
             prompt_json,
-            image_data,
+            image_url: imageUrl,
+            image_data: imageUrl ? null : image_data,
             parent_id: parent_id || null,
             project_id: project_id || 1,
             feedback: feedback || null,
@@ -422,8 +490,8 @@ async function startServer() {
       }
 
       const info = db.prepare(
-        "INSERT INTO generations (idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(idea, prompt_json, image_data, parent_id || null, project_id || 1, feedback || null, batch_id || null, selected_references || null);
+        "INSERT INTO generations (user_id, idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(userId, idea, prompt_json, image_data, parent_id || null, project_id || 1, feedback || null, batch_id || null, selected_references || null);
       
       res.json({ id: info.lastInsertRowid });
     } catch (error) {
@@ -432,52 +500,61 @@ async function startServer() {
     }
   });
 
-  app.get("/api/styles", async (req, res) => {
+  app.get("/api/styles", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const projectId = parseInt(req.query.projectId as string) || 1;
     if (supabase) {
       const { data, error } = await supabase
         .from('styles')
         .select('*')
         .eq('project_id', projectId)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false });
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
-    const rows = db.prepare("SELECT * FROM styles WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
+    const rows = db.prepare("SELECT * FROM styles WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
     res.json(rows);
   });
 
-  app.post("/api/styles", async (req, res) => {
+  app.post("/api/styles", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const { name, style_json, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
         .from('styles')
-        .insert([{ name, style_json, project_id: project_id || 1 }])
+        .insert([{ user_id: userId, name, style_json, project_id: project_id || 1 }])
         .select('id')
         .single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ id: data.id });
     }
     const info = db.prepare(
-      "INSERT INTO styles (name, style_json, project_id) VALUES (?, ?, ?)"
-    ).run(name, style_json, project_id || 1);
+      "INSERT INTO styles (user_id, name, style_json, project_id) VALUES (?, ?, ?, ?)"
+    ).run(userId, name, style_json, project_id || 1);
     res.json({ id: info.lastInsertRowid });
   });
 
   // Palettes
-  app.get("/api/palettes", async (req, res) => {
+  app.get("/api/palettes", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase) {
         const { data, error } = await supabase
           .from('palettes')
           .select('*')
           .eq('project_id', projectId)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false });
         if (error) return res.status(500).json({ error: error.message });
-        return res.json(data);
+        const mapped = data.map((p: any) => ({
+          ...p,
+          image_data: p.image_url || p.image_data
+        }));
+        return res.json(mapped);
       }
-      const rows = db.prepare("SELECT * FROM palettes WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
+      const rows = db.prepare("SELECT * FROM palettes WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching palettes:", error);
@@ -485,19 +562,33 @@ async function startServer() {
     }
   });
 
-  app.post("/api/palettes", async (req, res) => {
+  app.post("/api/palettes", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const { name, image_data, project_id } = req.body;
+      
+      let imageUrl = null;
+      if (image_data && image_data.startsWith('data:image')) {
+        const fileName = `${userId}/pal_${Date.now()}.png`;
+        imageUrl = await uploadToSupabase(image_data, 'promptphotos', fileName);
+      }
+
       if (supabase) {
         const { data, error } = await supabase
           .from('palettes')
-          .insert([{ name, image_data, project_id: project_id || 1 }])
+          .insert([{ 
+            user_id: userId, 
+            name, 
+            image_url: imageUrl,
+            image_data: imageUrl ? null : image_data, 
+            project_id: project_id || 1 
+          }])
           .select('id')
           .single();
         if (error) return res.status(500).json({ error: error.message });
         return res.json({ id: data.id });
       }
-      const info = db.prepare("INSERT INTO palettes (name, image_data, project_id) VALUES (?, ?, ?)").run(name, image_data, project_id || 1);
+      const info = db.prepare("INSERT INTO palettes (user_id, name, image_data, project_id) VALUES (?, ?, ?, ?)").run(userId, name, image_data, project_id || 1);
       res.json({ id: info.lastInsertRowid });
     } catch (error) {
       console.error("Error saving palette:", error);
@@ -506,19 +597,21 @@ async function startServer() {
   });
 
   // References
-  app.get("/api/references", async (req, res) => {
+  app.get("/api/references", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase) {
         const { data, error } = await supabase
           .from('references_images')
           .select('*')
           .eq('project_id', projectId)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false });
         if (error) return res.status(500).json({ error: error.message });
         return res.json(data);
       }
-      const rows = db.prepare("SELECT * FROM references_images WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
+      const rows = db.prepare("SELECT * FROM references_images WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching references:", error);
@@ -526,19 +619,20 @@ async function startServer() {
     }
   });
 
-  app.post("/api/references", async (req, res) => {
+  app.post("/api/references", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const { name, image_data, project_id } = req.body;
       if (supabase) {
         const { data, error } = await supabase
           .from('references_images')
-          .insert([{ name, image_data, project_id: project_id || 1 }])
+          .insert([{ user_id: userId, name, image_data, project_id: project_id || 1 }])
           .select('id')
           .single();
         if (error) return res.status(500).json({ error: error.message });
         return res.json({ id: data.id });
       }
-      const info = db.prepare("INSERT INTO references_images (name, image_data, project_id) VALUES (?, ?, ?)").run(name, image_data, project_id || 1);
+      const info = db.prepare("INSERT INTO references_images (user_id, name, image_data, project_id) VALUES (?, ?, ?, ?)").run(userId, name, image_data, project_id || 1);
       res.json({ id: info.lastInsertRowid });
     } catch (error) {
       console.error("Error saving reference:", error);
@@ -547,21 +641,21 @@ async function startServer() {
   });
 
   // Showcase
-  app.get("/api/showcase", async (req, res) => {
+  app.get("/api/showcase", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase) {
-        // In Supabase we use a more complex query or multiple queries
-        // For simplicity, we'll fetch showcase items and then join them manually or use Supabase's relational features
         const { data: showcase, error } = await supabase
           .from('showcase')
           .select(`
             *,
-            generations (image_data, idea),
+            generations (image_data, image_url, idea),
             references_images (image_data, name),
-            palettes (image_data, name)
+            palettes (image_data, image_url, name)
           `)
           .eq('project_id', projectId)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false });
         
         if (error) return res.status(500).json({ error: error.message });
@@ -570,13 +664,13 @@ async function startServer() {
           let image_preview = null;
           let title = null;
           if (s.type === 'generation') {
-            image_preview = s.generations?.image_data;
+            image_preview = s.generations?.image_url || s.generations?.image_data;
             title = s.generations?.idea;
           } else if (s.type === 'reference') {
             image_preview = s.references_images?.image_data;
             title = s.references_images?.name;
           } else if (s.type === 'palette') {
-            image_preview = s.palettes?.image_data;
+            image_preview = s.palettes?.image_url || s.palettes?.image_data;
             title = s.palettes?.name;
           }
           return { ...s, image_preview, title };
@@ -600,9 +694,9 @@ async function startServer() {
         LEFT JOIN generations g ON s.type = 'generation' AND s.item_id = g.id
         LEFT JOIN references_images r ON s.type = 'reference' AND s.item_id = r.id
         LEFT JOIN palettes p ON s.type = 'palette' AND s.item_id = p.id
-        WHERE s.project_id = ?
+        WHERE s.project_id = ? AND s.user_id = ?
         ORDER BY s.created_at DESC
-      `).all(projectId);
+      `).all(projectId, userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching showcase:", error);
@@ -610,33 +704,36 @@ async function startServer() {
     }
   });
 
-  app.post("/api/showcase", async (req, res) => {
+  app.post("/api/showcase", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const { type, item_id, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
         .from('showcase')
-        .insert([{ type, item_id, project_id: project_id || 1 }])
+        .insert([{ user_id: userId, type, item_id, project_id: project_id || 1 }])
         .select('id')
         .single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ id: data.id });
     }
-    const info = db.prepare("INSERT INTO showcase (type, item_id, project_id) VALUES (?, ?, ?)").run(type, item_id, project_id || 1);
+    const info = db.prepare("INSERT INTO showcase (user_id, type, item_id, project_id) VALUES (?, ?, ?, ?)").run(userId, type, item_id, project_id || 1);
     res.json({ id: info.lastInsertRowid });
   });
 
-  app.post("/api/showcase/:id/star", async (req, res) => {
+  app.post("/api/showcase/:id/star", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     if (supabase) {
       // Get current state
-      const { data: current } = await supabase.from('showcase').select('starred').eq('id', req.params.id).single();
+      const { data: current } = await supabase.from('showcase').select('starred').eq('id', req.params.id).eq('user_id', userId).single();
       const { error } = await supabase
         .from('showcase')
         .update({ starred: !current?.starred })
-        .eq('id', req.params.id);
+        .eq('id', req.params.id)
+        .eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ success: true });
     }
-    db.prepare("UPDATE showcase SET starred = 1 - starred WHERE id = ?").run(req.params.id);
+    db.prepare("UPDATE showcase SET starred = 1 - starred WHERE id = ? AND user_id = ?").run(req.params.id, userId);
     res.json({ success: true });
   });
 
@@ -676,17 +773,19 @@ async function startServer() {
   });
 
   // Project Settings
-  app.get("/api/projects", async (req, res) => {
+  app.get("/api/projects", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       if (supabase) {
         const { data, error } = await supabase
           .from('project_settings')
           .select('*')
+          .eq('user_id', userId)
           .order('updated_at', { ascending: false });
         if (error) throw error;
         return res.json(data);
       }
-      const rows = db.prepare("SELECT * FROM project_settings ORDER BY updated_at DESC").all();
+      const rows = db.prepare("SELECT * FROM project_settings WHERE user_id = ? ORDER BY updated_at DESC").all(userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching projects:", error);
@@ -694,18 +793,20 @@ async function startServer() {
     }
   });
 
-  app.get("/api/projects/:id", async (req, res) => {
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       if (supabase) {
         const { data, error } = await supabase
           .from('project_settings')
           .select('*')
           .eq('id', req.params.id)
+          .eq('user_id', userId)
           .single();
         if (error) throw error;
         return res.json(data);
       }
-      const row = db.prepare("SELECT * FROM project_settings WHERE id = ?").get(req.params.id);
+      const row = db.prepare("SELECT * FROM project_settings WHERE id = ? AND user_id = ?").get(req.params.id, userId);
       res.json(row || null);
     } catch (error) {
       console.error("Error fetching project settings:", error);
@@ -713,20 +814,21 @@ async function startServer() {
     }
   });
 
-  app.post("/api/projects", async (req, res) => {
+  app.post("/api/projects", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { data, error } = await supabase
           .from('project_settings')
-          .insert([{ name: name || 'New Project', brief: brief || '', global_style: global_style || '' }])
+          .insert([{ user_id: userId, name: name || 'New Project', brief: brief || '', global_style: global_style || '' }])
           .select('id')
           .single();
         if (error) throw error;
         return res.json({ id: data.id });
       }
-      const info = db.prepare("INSERT INTO project_settings (name, brief, global_style) VALUES (?, ?, ?)")
-        .run(name || 'New Project', brief || '', global_style || '');
+      const info = db.prepare("INSERT INTO project_settings (user_id, name, brief, global_style) VALUES (?, ?, ?, ?)")
+        .run(userId, name || 'New Project', brief || '', global_style || '');
       res.json({ id: info.lastInsertRowid });
     } catch (error) {
       console.error("Error creating project:", error);
@@ -734,19 +836,21 @@ async function startServer() {
     }
   });
 
-  app.post("/api/projects/:id", async (req, res) => {
+  app.post("/api/projects/:id", requireAuth, async (req, res) => {
     try {
+      const userId = req.session.user.id;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { error } = await supabase
           .from('project_settings')
           .update({ name, brief, global_style, updated_at: new Date().toISOString() })
-          .eq('id', req.params.id);
+          .eq('id', req.params.id)
+          .eq('user_id', userId);
         if (error) throw error;
         return res.json({ success: true });
       }
-      db.prepare("UPDATE project_settings SET name = ?, brief = ?, global_style = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .run(name, brief, global_style, req.params.id);
+      db.prepare("UPDATE project_settings SET name = ?, brief = ?, global_style = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+        .run(name, brief, global_style, req.params.id, userId);
       res.json({ success: true });
     } catch (error) {
       console.error("Error updating project settings:", error);
@@ -754,101 +858,121 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/generations/:id", async (req, res) => {
+  app.delete("/api/generations/:id", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     if (supabase) {
-      const { error } = await supabase.from('generations').delete().eq('id', req.params.id);
+      const { error } = await supabase.from('generations').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ success: true });
     }
-    db.prepare("DELETE FROM generations WHERE id = ?").run(req.params.id);
+    db.prepare("DELETE FROM generations WHERE id = ? AND user_id = ?").run(req.params.id, userId);
     res.json({ success: true });
   });
 
   // Prompt Library
-  app.get("/api/library", async (req, res) => {
+  app.get("/api/library", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     if (supabase) {
       const { data, error } = await supabase
         .from('prompt_library')
         .select('*')
+        .eq('user_id', userId)
         .order('category', { ascending: true })
         .order('title', { ascending: true });
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
-    const rows = db.prepare("SELECT * FROM prompt_library ORDER BY category ASC, title ASC").all();
+    const rows = db.prepare("SELECT * FROM prompt_library WHERE user_id = ? ORDER BY category ASC, title ASC").all(userId);
     res.json(rows);
   });
 
-  app.post("/api/library", async (req, res) => {
+  app.post("/api/library", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const { category, title, prompt } = req.body;
     if (supabase) {
       const { data, error } = await supabase
         .from('prompt_library')
-        .insert([{ category, title, prompt, project_id: 1 }])
+        .insert([{ user_id: userId, category, title, prompt, project_id: 1 }])
         .select('id')
         .single();
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ id: data.id });
     }
-    const info = db.prepare("INSERT INTO prompt_library (category, title, prompt, project_id) VALUES (?, ?, ?, 1)")
-      .run(category, title, prompt);
+    const info = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, 1)")
+      .run(userId, category, title, prompt);
     res.json({ id: info.lastInsertRowid });
   });
 
-  app.post("/api/library/import", (req, res) => {
+  app.post("/api/library/import", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     const { items } = req.body;
-    const insert = db.prepare("INSERT INTO prompt_library (category, title, prompt, project_id) VALUES (?, ?, ?, 1)");
+    
+    if (supabase) {
+      const { error } = await supabase.from('prompt_library').insert(
+        items.map((item: any) => ({
+          user_id: userId,
+          category: item.category,
+          title: item.title,
+          prompt: item.prompt,
+          project_id: 1
+        }))
+      );
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ success: true });
+    }
+
+    const insert = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, 1)");
     const transaction = db.transaction((items) => {
       for (const item of items) {
-        insert.run(item.category, item.title, item.prompt);
+        insert.run(userId, item.category, item.title, item.prompt);
       }
     });
     transaction(items);
     res.json({ success: true });
   });
 
-  app.delete("/api/library/:id", async (req, res) => {
+  app.delete("/api/library/:id", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     if (supabase) {
-      const { error } = await supabase.from('prompt_library').delete().eq('id', req.params.id);
+      const { error } = await supabase.from('prompt_library').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
       return res.json({ success: true });
     }
-    db.prepare("DELETE FROM prompt_library WHERE id = ?").run(req.params.id);
+    db.prepare("DELETE FROM prompt_library WHERE id = ? AND user_id = ?").run(req.params.id, userId);
     res.json({ success: true });
   });
 
   // Privacy: Purge Server Database
-  app.post("/api/purge", (req, res) => {
+  app.post("/api/purge", requireAuth, (req, res) => {
+    const userId = req.session.user.id;
     try {
-      db.exec(`
-        DELETE FROM comments;
-        DELETE FROM showcase;
-        DELETE FROM references_images;
-        DELETE FROM palettes;
-        DELETE FROM prompt_library;
-        DELETE FROM styles;
-        DELETE FROM generations;
-        DELETE FROM project_settings WHERE id > 1;
-        UPDATE project_settings SET name = 'Main Workspace', brief = 'Your primary creative environment.', global_style = 'Modern, Clean, Minimalist' WHERE id = 1;
-      `);
-      res.json({ success: true, message: "Server database purged successfully." });
+      db.prepare("DELETE FROM showcase WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM references_images WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM palettes WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM prompt_library WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM styles WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM generations WHERE user_id = ?").run(userId);
+      db.prepare("DELETE FROM project_settings WHERE user_id = ?").run(userId);
+      
+      res.json({ success: true, message: "Your data has been purged successfully." });
     } catch (error) {
+      console.error("Purge failed:", error);
       res.status(500).json({ error: "Purge failed" });
     }
   });
 
   // Export/Import
-  app.get("/api/export", (req, res) => {
+  app.get("/api/export", requireAuth, (req, res) => {
+    const userId = req.session.user.id;
     try {
       const data = {
-        projects: db.prepare("SELECT * FROM project_settings").all(),
-        generations: db.prepare("SELECT * FROM generations").all(),
-        library: db.prepare("SELECT * FROM prompt_library").all(),
-        palettes: db.prepare("SELECT * FROM palettes").all(),
-        references: db.prepare("SELECT * FROM references_images").all(),
-        showcase: db.prepare("SELECT * FROM showcase").all(),
-        styles: db.prepare("SELECT * FROM styles").all(),
-        comments: db.prepare("SELECT * FROM comments").all(),
+        projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
+        generations: db.prepare("SELECT * FROM generations WHERE user_id = ?").all(userId),
+        library: db.prepare("SELECT * FROM prompt_library WHERE user_id = ?").all(userId),
+        palettes: db.prepare("SELECT * FROM palettes WHERE user_id = ?").all(userId),
+        references: db.prepare("SELECT * FROM references_images WHERE user_id = ?").all(userId),
+        showcase: db.prepare("SELECT * FROM showcase WHERE user_id = ?").all(userId),
+        styles: db.prepare("SELECT * FROM styles WHERE user_id = ?").all(userId),
       };
       res.json(data);
     } catch (error) {
@@ -856,66 +980,59 @@ async function startServer() {
     }
   });
 
-  app.post("/api/import", (req, res) => {
+  app.post("/api/import", requireAuth, (req, res) => {
+    const userId = req.session.user.id;
     try {
       const data = req.body;
       const transaction = db.transaction((data) => {
-        // Clear existing data (optional, but cleaner for a full restore)
-        db.prepare("DELETE FROM comments").run();
-        db.prepare("DELETE FROM showcase").run();
-        db.prepare("DELETE FROM references_images").run();
-        db.prepare("DELETE FROM palettes").run();
-        db.prepare("DELETE FROM prompt_library").run();
-        db.prepare("DELETE FROM styles").run();
-        db.prepare("DELETE FROM generations").run();
-        db.prepare("DELETE FROM project_settings").run();
+        db.prepare("DELETE FROM showcase WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM references_images WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM palettes WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM prompt_library WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM styles WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM generations WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM project_settings WHERE user_id = ?").run(userId);
 
         // Restore projects
-        const insProject = db.prepare("INSERT INTO project_settings (id, name, brief, global_style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)");
+        const insProject = db.prepare("INSERT INTO project_settings (user_id, name, brief, global_style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)");
         for (const p of data.projects || []) {
-          insProject.run(p.id, p.name, p.brief, p.global_style, p.created_at, p.updated_at);
+          insProject.run(userId, p.name, p.brief, p.global_style, p.created_at, p.updated_at);
         }
 
         // Restore generations
-        const insGen = db.prepare("INSERT INTO generations (id, project_id, idea, prompt_json, image_data, parent_id, feedback, batch_id, selected_references, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const insGen = db.prepare("INSERT INTO generations (user_id, project_id, idea, prompt_json, image_data, parent_id, feedback, batch_id, selected_references, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         for (const g of data.generations || []) {
-          insGen.run(g.id, g.project_id, g.idea, g.prompt_json, g.image_data, g.parent_id, g.feedback, g.batch_id, g.selected_references, g.created_at);
+          insGen.run(userId, g.project_id, g.idea, g.prompt_json, g.image_data, g.parent_id, g.feedback, g.batch_id, g.selected_references, g.created_at);
         }
 
         // Restore library
-        const insLib = db.prepare("INSERT INTO prompt_library (id, project_id, category, title, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+        const insLib = db.prepare("INSERT INTO prompt_library (user_id, project_id, category, title, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)");
         for (const l of data.library || []) {
-          insLib.run(l.id, l.project_id, l.category, l.title, l.prompt, l.created_at);
+          insLib.run(userId, l.project_id, l.category, l.title, l.prompt, l.created_at);
         }
 
         // Restore palettes
-        const insPal = db.prepare("INSERT INTO palettes (id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
+        const insPal = db.prepare("INSERT INTO palettes (user_id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
         for (const p of data.palettes || []) {
-          insPal.run(p.id, p.project_id, p.name, p.image_data, p.created_at);
+          insPal.run(userId, p.project_id, p.name, p.image_data, p.created_at);
         }
 
         // Restore references
-        const insRef = db.prepare("INSERT INTO references_images (id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
+        const insRef = db.prepare("INSERT INTO references_images (user_id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
         for (const r of data.references || []) {
-          insRef.run(r.id, r.project_id, r.name, r.image_data, r.created_at);
+          insRef.run(userId, r.project_id, r.name, r.image_data, r.created_at);
         }
 
         // Restore showcase
-        const insShow = db.prepare("INSERT INTO showcase (id, project_id, type, item_id, starred, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+        const insShow = db.prepare("INSERT INTO showcase (user_id, project_id, type, item_id, starred, created_at) VALUES (?, ?, ?, ?, ?, ?)");
         for (const s of data.showcase || []) {
-          insShow.run(s.id, s.project_id, s.type, s.item_id, s.starred, s.created_at);
+          insShow.run(userId, s.project_id, s.type, s.item_id, s.starred, s.created_at);
         }
 
         // Restore styles
-        const insStyle = db.prepare("INSERT INTO styles (id, project_id, name, style_json, created_at) VALUES (?, ?, ?, ?, ?)");
+        const insStyle = db.prepare("INSERT INTO styles (user_id, project_id, name, style_json, created_at) VALUES (?, ?, ?, ?, ?)");
         for (const s of data.styles || []) {
-          insStyle.run(s.id, s.project_id, s.name, s.style_json, s.created_at);
-        }
-
-        // Restore comments
-        const insComm = db.prepare("INSERT INTO comments (id, showcase_id, text, author, created_at) VALUES (?, ?, ?, ?, ?)");
-        for (const c of data.comments || []) {
-          insComm.run(c.id, c.showcase_id, c.text, c.author, c.created_at);
+          insStyle.run(userId, s.project_id, s.name, s.style_json, s.created_at);
         }
       });
 
@@ -941,22 +1058,19 @@ async function startServer() {
     });
   }
 
-  app.post("/api/sync", async (req, res) => {
-    if (!req.session?.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  app.post("/api/sync", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     try {
       const data = {
-        projects: db.prepare("SELECT * FROM project_settings").all(),
-        generations: db.prepare("SELECT * FROM generations").all(),
-        library: db.prepare("SELECT * FROM prompt_library").all(),
-        palettes: db.prepare("SELECT * FROM palettes").all(),
-        references: db.prepare("SELECT * FROM references_images").all(),
-        showcase: db.prepare("SELECT * FROM showcase").all(),
-        styles: db.prepare("SELECT * FROM styles").all(),
-        comments: db.prepare("SELECT * FROM comments").all(),
+        projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
+        generations: db.prepare("SELECT * FROM generations WHERE user_id = ?").all(userId),
+        library: db.prepare("SELECT * FROM prompt_library WHERE user_id = ?").all(userId),
+        palettes: db.prepare("SELECT * FROM palettes WHERE user_id = ?").all(userId),
+        references: db.prepare("SELECT * FROM references_images WHERE user_id = ?").all(userId),
+        showcase: db.prepare("SELECT * FROM showcase WHERE user_id = ?").all(userId),
+        styles: db.prepare("SELECT * FROM styles WHERE user_id = ?").all(userId),
       };
-      await saveToGCS(req.session.user.id, data);
+      await saveToGCS(userId, data);
       res.json({ success: true });
     } catch (error) {
       console.error("Sync to GCS failed:", error);
@@ -964,49 +1078,43 @@ async function startServer() {
     }
   });
 
-  app.post("/api/restore", async (req, res) => {
-    if (!req.session?.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  app.post("/api/restore", requireAuth, async (req, res) => {
+    const userId = req.session.user.id;
     try {
-      const data = await loadFromGCS(req.session.user.id);
+      const data = await loadFromGCS(userId);
       if (!data) {
         return res.status(404).json({ error: "No backup found in GCS" });
       }
       
       const transaction = db.transaction((data) => {
-        db.prepare("DELETE FROM comments").run();
-        db.prepare("DELETE FROM showcase").run();
-        db.prepare("DELETE FROM references_images").run();
-        db.prepare("DELETE FROM palettes").run();
-        db.prepare("DELETE FROM prompt_library").run();
-        db.prepare("DELETE FROM styles").run();
-        db.prepare("DELETE FROM generations").run();
-        db.prepare("DELETE FROM project_settings").run();
+        db.prepare("DELETE FROM showcase WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM references_images WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM palettes WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM prompt_library WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM styles WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM generations WHERE user_id = ?").run(userId);
+        db.prepare("DELETE FROM project_settings WHERE user_id = ?").run(userId);
 
-        const insProject = db.prepare("INSERT INTO project_settings (id, name, brief, global_style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)");
-        for (const p of data.projects || []) insProject.run(p.id, p.name, p.brief, p.global_style, p.created_at, p.updated_at);
+        const insProject = db.prepare("INSERT INTO project_settings (user_id, name, brief, global_style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const p of data.projects || []) insProject.run(userId, p.name, p.brief, p.global_style, p.created_at, p.updated_at);
 
-        const insGen = db.prepare("INSERT INTO generations (id, project_id, idea, prompt_json, image_data, parent_id, feedback, batch_id, selected_references, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        for (const g of data.generations || []) insGen.run(g.id, g.project_id, g.idea, g.prompt_json, g.image_data, g.parent_id, g.feedback, g.batch_id, g.selected_references, g.created_at);
+        const insGen = db.prepare("INSERT INTO generations (user_id, project_id, idea, prompt_json, image_data, parent_id, feedback, batch_id, selected_references, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const g of data.generations || []) insGen.run(userId, g.project_id, g.idea, g.prompt_json, g.image_data, g.parent_id, g.feedback, g.batch_id, g.selected_references, g.created_at);
 
-        const insLib = db.prepare("INSERT INTO prompt_library (id, project_id, category, title, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)");
-        for (const l of data.library || []) insLib.run(l.id, l.project_id, l.category, l.title, l.prompt, l.created_at);
+        const insLib = db.prepare("INSERT INTO prompt_library (user_id, project_id, category, title, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const l of data.library || []) insLib.run(userId, l.project_id, l.category, l.title, l.prompt, l.created_at);
 
-        const insPal = db.prepare("INSERT INTO palettes (id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
-        for (const p of data.palettes || []) insPal.run(p.id, p.project_id, p.name, p.image_data, p.created_at);
+        const insPal = db.prepare("INSERT INTO palettes (user_id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
+        for (const p of data.palettes || []) insPal.run(userId, p.project_id, p.name, p.image_data, p.created_at);
 
-        const insRef = db.prepare("INSERT INTO references_images (id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
-        for (const r of data.references || []) insRef.run(r.id, r.project_id, r.name, r.image_data, r.created_at);
+        const insRef = db.prepare("INSERT INTO references_images (user_id, project_id, name, image_data, created_at) VALUES (?, ?, ?, ?, ?)");
+        for (const r of data.references || []) insRef.run(userId, r.project_id, r.name, r.image_data, r.created_at);
 
-        const insShow = db.prepare("INSERT INTO showcase (id, project_id, type, item_id, starred, created_at) VALUES (?, ?, ?, ?, ?, ?)");
-        for (const s of data.showcase || []) insShow.run(s.id, s.project_id, s.type, s.item_id, s.starred, s.created_at);
+        const insShow = db.prepare("INSERT INTO showcase (user_id, project_id, type, item_id, starred, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const s of data.showcase || []) insShow.run(userId, s.project_id, s.type, s.item_id, s.starred, s.created_at);
 
-        const insStyle = db.prepare("INSERT INTO styles (id, project_id, name, style_json, created_at) VALUES (?, ?, ?, ?, ?)");
-        for (const s of data.styles || []) insStyle.run(s.id, s.project_id, s.name, s.style_json, s.created_at);
-
-        const insComm = db.prepare("INSERT INTO comments (id, showcase_id, text, author, created_at) VALUES (?, ?, ?, ?, ?)");
-        for (const c of data.comments || []) insComm.run(c.id, c.showcase_id, c.text, c.author, c.created_at);
+        const insStyle = db.prepare("INSERT INTO styles (user_id, project_id, name, style_json, created_at) VALUES (?, ?, ?, ?, ?)");
+        for (const s of data.styles || []) insStyle.run(userId, s.project_id, s.name, s.style_json, s.created_at);
       });
 
       transaction(data);
