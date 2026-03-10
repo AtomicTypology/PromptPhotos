@@ -26,10 +26,31 @@ import {
   Wand2,
   CheckCircle2,
   AlertCircle,
-  ArrowRight
+  ArrowRight,
+  ArrowLeft,
+  LifeBuoy,
+  Database,
+  Download,
+  RefreshCw,
+  ShieldCheck,
+  Cloud,
+  CloudUpload,
+  CloudDownload,
+  LogOut,
+  User
 } from 'lucide-react';
+import { get, set } from 'idb-keyval';
 import { generateStructuredPrompt, generateImage, StructuredPrompt, generateMoodboard, Moodboard, critiqueImage, Critique } from './services/gemini';
-import { api, Generation, StyleTemplate, Palette as PaletteType, ReferenceImage, ShowcaseItem, Comment, ProjectSettings, PromptLibraryItem } from './services/api';
+import { api, Generation, StyleTemplate, Palette as PaletteType, ReferenceImage, ShowcaseItem, Comment, ProjectSettings, PromptLibraryItem, AuthUser } from './services/api';
+
+declare global {
+  interface Window {
+    aistudio?: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project'>('dashboard');
@@ -47,6 +68,14 @@ export default function App() {
   const [showcase, setShowcase] = useState<ShowcaseItem[]>([]);
   const [library, setLibrary] = useState<PromptLibraryItem[]>([]);
   const [projects, setProjects] = useState<ProjectSettings[]>([]);
+  const [projectStats, setProjectStats] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<{ generations: any[]; library: any[]; projects: any[] } | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isRescuing, setIsRescuing] = useState(false);
+  const [rescueResult, setRescueResult] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [beachArtFound, setBeachArtFound] = useState<any>(null);
   const [currentProjectId, setCurrentProjectId] = useState<number>(() => {
     const saved = localStorage.getItem('promptstudio_current_project_id');
     return saved ? Number(saved) : 1;
@@ -58,6 +87,8 @@ export default function App() {
   const [project, setProject] = useState<ProjectSettings | null>(null);
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<number | null>(null);
+  const [editProjectName, setEditProjectName] = useState('');
 
   const [isGeneratingMoodboard, setIsGeneratingMoodboard] = useState(false);
   const [vibeInput, setVibeInput] = useState('');
@@ -80,10 +111,115 @@ export default function App() {
   const paletteUploadRef = useRef<HTMLInputElement>(null);
   const csvUploadRef = useRef<HTMLInputElement>(null);
 
+  const [hasSelectedKey, setHasSelectedKey] = useState(true);
+
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const has = await window.aistudio.hasSelectedApiKey();
+        setHasSelectedKey(has);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasSelectedKey(true);
+    }
+  };
+
   const [autoDevelop, setAutoDevelop] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const userData = await api.getMe();
+        setUser(userData);
+      } catch (error) {
+        console.error("Failed to fetch user:", error);
+      }
+    };
+    fetchUser();
+  }, []);
+
+  const handleLogin = async () => {
+    setIsLoggingIn(true);
+    try {
+      const { url } = await api.getAuthUrl();
+      const authWindow = window.open(url, 'google_oauth', 'width=600,height=700');
+      
+      if (!authWindow) {
+        alert('Please allow popups to sign in with Google');
+        return;
+      }
+
+      const handleMessage = async (event: MessageEvent) => {
+        if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+          const userData = await api.getMe();
+          setUser(userData);
+          window.removeEventListener('message', handleMessage);
+          loadInitialData();
+        }
+      };
+      window.addEventListener('message', handleMessage);
+    } catch (error) {
+      console.error("Login failed:", error);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+      setUser(null);
+      loadInitialData();
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const handleSyncToGCS = async () => {
+    if (!user) return;
+    setIsSyncing(true);
+    try {
+      await api.syncToGCS();
+      alert("Workspace successfully synced to Google Cloud Storage!");
+    } catch (error) {
+      console.error("Sync failed:", error);
+      alert("Failed to sync to Google Cloud. Please check your configuration.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleRestoreFromGCS = async () => {
+    if (!user) return;
+    if (!confirm("This will overwrite your current local workspace with the backup from Google Cloud. Proceed?")) return;
+    
+    setIsRestoring(true);
+    try {
+      await api.restoreFromGCS();
+      alert("Workspace successfully restored from Google Cloud!");
+      window.location.reload();
+    } catch (error) {
+      console.error("Restore failed:", error);
+      alert("Failed to restore from Google Cloud. No backup found or configuration error.");
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
   useEffect(() => {
     loadInitialData();
+    checkBrowserBackup();
   }, []);
 
   useEffect(() => {
@@ -92,9 +228,128 @@ export default function App() {
     }
   }, [currentProjectId]);
 
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [hasBrowserBackup, setHasBrowserBackup] = useState(false);
+  const [lastBackupDate, setLastBackupDate] = useState<string | null>(null);
+  const [storageMode, setStorageMode] = useState<'local' | 'cloud'>(() => {
+    const saved = localStorage.getItem('promptstudio_storage_mode');
+    return (saved as any) || 'local';
+  });
+
+  const toggleStorageMode = () => {
+    const newMode = storageMode === 'local' ? 'cloud' : 'local';
+    setStorageMode(newMode);
+    localStorage.setItem('promptstudio_storage_mode', newMode);
+    alert(`Storage mode switched to ${newMode.toUpperCase()}. ${newMode === 'local' ? 'Data will now stay in your browser.' : 'Data will sync to the server database.'}`);
+  };
+
+  const purgeServerCache = async () => {
+    if (confirm("PRIVACY ALERT: This will permanently delete all projects and history from the cloud server. Your browser backup will remain safe. Proceed?")) {
+      try {
+        await api.purgeServer();
+        alert("Server database purged. Your workspace is now local-only.");
+        window.location.reload();
+      } catch (error) {
+        alert("Failed to purge server.");
+      }
+    }
+  };
+
+  const saveToBrowserBackup = async () => {
+    try {
+      const data = await api.exportWorkspace();
+      await set('promptstudio_workspace_backup', data);
+      await set('promptstudio_backup_date', new Date().toISOString());
+      setLastBackupDate(new Date().toISOString());
+      setHasBrowserBackup(true);
+      console.log("Browser backup updated.");
+    } catch (error) {
+      console.error("Failed to save browser backup:", error);
+    }
+  };
+
+  const checkBrowserBackup = async () => {
+    try {
+      const backup = await get('promptstudio_workspace_backup');
+      const date = await get('promptstudio_backup_date');
+      if (backup && date) {
+        setHasBrowserBackup(true);
+        setLastBackupDate(date);
+        
+        // If the current database is essentially empty (only 1 project with default name), 
+        // offer to restore the backup automatically.
+        const stats = await api.getProjectStats();
+        const totalGenerations = stats.reduce((acc, s) => acc + (s.generation_count || 0), 0);
+        
+        if (totalGenerations === 0 && stats.length <= 1) {
+          if (confirm(`Welcome back! We found a local backup from ${new Date(date).toLocaleString()}. Would you like to restore your workspace?`)) {
+            await api.importWorkspace(backup);
+            window.location.reload();
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check browser backup:", error);
+    }
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const data = await api.exportWorkspace();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `promptstudio-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert('Export failed');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm("This will overwrite all current data in your workspace. Are you sure?")) return;
+
+    setIsImporting(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        await api.importWorkspace(data);
+        alert('Workspace restored successfully!');
+        window.location.reload();
+      } catch (error) {
+        console.error(error);
+        alert('Import failed. Please check the file format.');
+      } finally {
+        setIsImporting(false);
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const loadInitialData = async () => {
-    const projs = await api.getProjects();
+    const [projs, stats] = await Promise.all([
+      api.getProjects(),
+      api.getProjectStats()
+    ]);
     setProjects(projs);
+    setProjectStats(stats);
+    
+    // Check for beach art specifically to answer user
+    const beachResults = await api.globalSearch('beach');
+    if (beachResults.generations.length > 0 || beachResults.library.length > 0) {
+      setBeachArtFound(beachResults);
+    }
     
     const savedId = localStorage.getItem('promptstudio_current_project_id');
     if (savedId) {
@@ -119,7 +374,7 @@ export default function App() {
       api.getReferences(projectId),
       api.getShowcase(projectId),
       api.getProject(projectId),
-      api.getLibrary(projectId),
+      api.getLibrary(),
       api.getStyles(projectId)
     ]);
     setHistory(h);
@@ -130,10 +385,13 @@ export default function App() {
     setLibrary(lib);
   };
 
-  const loadData = () => {
+  const loadData = async () => {
+    await loadInitialData();
     if (currentProjectId) {
-      loadProjectData(currentProjectId);
+      await loadProjectData(currentProjectId);
     }
+    // After any data load, update the browser backup
+    saveToBrowserBackup();
   };
 
   const handleUpdateProject = async () => {
@@ -146,11 +404,26 @@ export default function App() {
         global_style: project.global_style
       });
       loadInitialData();
-      alert('Project settings updated.');
     } catch (error) {
       console.error(error);
     } finally {
       setIsSavingProject(false);
+    }
+  };
+
+  const handleRenameProject = async (id: number) => {
+    if (!editProjectName.trim()) return;
+    try {
+      const p = projects.find(proj => proj.id === id);
+      if (!p) return;
+      await api.updateProject(id, {
+        ...p,
+        name: editProjectName
+      });
+      setEditingProjectId(null);
+      loadInitialData();
+    } catch (error) {
+      console.error(error);
     }
   };
 
@@ -196,6 +469,10 @@ export default function App() {
   };
 
   const handleGenerateImage = async (overridePrompt?: StructuredPrompt) => {
+    if (!hasSelectedKey) {
+      await handleSelectKey();
+      // Even if they cancel, we try to proceed, but the API call will fail with a clear error
+    }
     const promptToUse = overridePrompt || structuredPrompt;
     if (!promptToUse) return;
     setIsGeneratingImage(true);
@@ -243,13 +520,18 @@ export default function App() {
       if (results.length > 0) {
         setBatchResults(results);
         setGeneratedImage(results[0].image_data);
-        loadData();
+        await loadData();
       } else {
         alert('Failed to generate images. Please check your API key or try again.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('An unexpected error occurred during generation.');
+      if (error.message?.includes('Requested entity was not found')) {
+        setHasSelectedKey(false);
+        alert('Your API key selection seems invalid. Please select a key from a paid Google Cloud project.');
+      } else {
+        alert('An unexpected error occurred during generation.');
+      }
     } finally {
       setIsGeneratingImage(false);
     }
@@ -314,6 +596,22 @@ export default function App() {
     loadData();
   };
 
+  const saveToLibrary = async (gen: Generation) => {
+    try {
+      await api.saveLibraryItem({
+        category: 'Generations',
+        title: gen.idea,
+        prompt: gen.idea, // Or maybe the structured prompt? The library prompt is usually text.
+        project_id: 1 // Default to global project 1
+      });
+      alert('Saved to Library!');
+      loadData();
+    } catch (error) {
+      console.error(error);
+      alert('Failed to save to library.');
+    }
+  };
+
   const loadComments = async (id: number) => {
     const c = await api.getComments(id);
     setComments(c);
@@ -340,13 +638,13 @@ export default function App() {
         category: 'Moodboard',
         title: mood.palette.name,
         prompt: p,
-        project_id: currentProjectId
+        project_id: 1
       }));
-      await api.importLibrary(libraryItems, currentProjectId);
+      await api.importLibrary(libraryItems);
       
       setVibeInput('');
       loadData();
-      alert('Moodboard generated! Check your Palettes and Library.');
+      alert('Mood Board generated! Check your Palettes and Library.');
     } catch (error) {
       console.error(error);
     } finally {
@@ -399,13 +697,13 @@ export default function App() {
             category: parts[0].replace(/"/g, ''),
             title: parts[1].replace(/"/g, ''),
             prompt: parts[2].replace(/"/g, ''),
-            project_id: currentProjectId
+            project_id: 1
           });
         }
       }
 
       if (items.length > 0) {
-        await api.importLibrary(items, currentProjectId);
+        await api.importLibrary(items);
         loadData();
         alert(`Imported ${items.length} prompts.`);
       }
@@ -413,11 +711,33 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  const handleCSVExport = () => {
+    if (library.length === 0) {
+      alert("Library is empty.");
+      return;
+    }
+    
+    const headers = ["Category", "Title", "Prompt"];
+    const rows = library.map(item => [
+      `"${item.category.replace(/"/g, '""')}"`,
+      `"${item.title.replace(/"/g, '""')}"`,
+      `"${item.prompt.replace(/"/g, '""')}"`
+    ]);
+    
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `prompt_library_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleBranch = (gen: Generation) => {
-    setIdea(gen.idea + " (Branch)");
-    setParentGeneration(gen);
-    setStructuredPrompt(JSON.parse(gen.prompt_json));
-    setActiveTab('generate');
+    handleRefine(gen);
   };
 
   const openShowcaseDetail = (item: ShowcaseItem) => {
@@ -428,6 +748,37 @@ export default function App() {
   const getGenerationForItem = (item: ShowcaseItem) => {
     if (item.type !== 'generation') return null;
     return history.find(g => g.id === item.item_id);
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const results = await api.globalSearch(searchQuery);
+      setSearchResults(results);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleRescue = async () => {
+    setIsRescuing(true);
+    try {
+      const result = await api.rescueData();
+      setRescueResult(result);
+      loadInitialData();
+      if (currentProjectId) loadProjectData(currentProjectId);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsRescuing(false);
+    }
   };
 
   return (
@@ -441,12 +792,12 @@ export default function App() {
         <div className="flex flex-row md:flex-col items-center gap-4 md:gap-6 flex-1">
           {[
             { id: 'dashboard', icon: LayoutGrid, label: 'Dashboard' },
+            { id: 'moodboard', icon: Palette, label: 'Mood Board' },
             { id: 'generate', icon: Plus, label: 'Create' },
-            { id: 'project', icon: Layers, label: 'Project' },
             { id: 'library', icon: Library, label: 'Library' },
-            { id: 'archive', icon: History, label: 'Archive' },
-            { id: 'moodboard', icon: Palette, label: 'Mood' },
-            { id: 'showcase', icon: FolderHeart, label: 'Show' }
+            { id: 'showcase', icon: FolderHeart, label: 'Showcase' },
+            { id: 'project', icon: Layers, label: 'Project' },
+            { id: 'archive', icon: History, label: 'History' }
           ].map((tab) => (
             <button 
               key={tab.id}
@@ -461,19 +812,71 @@ export default function App() {
 
         <div className="mt-auto pt-6 border-t border-studio-border/30 w-full flex flex-col items-center gap-4">
           <button 
-            onClick={() => alert('Profile settings coming soon!')}
-            className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
-            title="Main Account"
+            onClick={handleExport}
+            disabled={isExporting}
+            className="p-3 rounded-2xl text-studio-secondary hover:bg-studio-bg hover:text-studio-accent transition-all"
+            title="Export Workspace Backup"
           >
-            <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
-              JD
-            </div>
+            <Download className="w-6 h-6" />
           </button>
+          
+          {user ? (
+            <div className="flex flex-col items-center gap-4">
+              <button 
+                onClick={handleSyncToGCS}
+                disabled={isSyncing}
+                className={`p-3 rounded-2xl transition-all ${isSyncing ? 'animate-pulse text-studio-accent' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-accent'}`}
+                title="Sync to Google Cloud"
+              >
+                <CloudUpload className="w-6 h-6" />
+              </button>
+              <button 
+                onClick={handleLogout}
+                className="p-3 rounded-2xl text-studio-secondary hover:bg-studio-bg hover:text-red-500 transition-all"
+                title="Logout"
+              >
+                <LogOut className="w-6 h-6" />
+              </button>
+              <div className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors" title={user.name}>
+                <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              </div>
+            </div>
+          ) : (
+            <button 
+              onClick={handleLogin}
+              disabled={isLoggingIn}
+              className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
+              title="Sign in with Google"
+            >
+              <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
+                {isLoggingIn ? '...' : <User className="w-5 h-5" />}
+              </div>
+            </button>
+          )}
         </div>
       </nav>
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto h-screen no-scrollbar">
+        {!hasSelectedKey && (
+          <div className="bg-studio-accent text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5" />
+              <p className="text-sm font-medium">
+                High-quality image generation requires a Gemini API key. 
+                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-1 hover:text-white/80">
+                  Learn about billing
+                </a>
+              </p>
+            </div>
+            <button 
+              onClick={handleSelectKey}
+              className="bg-white text-studio-accent px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-white/90 transition-colors"
+            >
+              Select API Key
+            </button>
+          </div>
+        )}
         <div className="max-w-7xl mx-auto p-6 md:p-12">
           
           {/* Project Switcher Bar */}
@@ -509,24 +912,175 @@ export default function App() {
                   <h1 className="text-4xl font-bold tracking-tight">Main Dashboard</h1>
                   <p className="text-studio-secondary mt-1">Overview of your creative workspace.</p>
                 </div>
-                <div className="flex items-center gap-4 p-4 bg-studio-card rounded-2xl border border-studio-border/30 shadow-sm">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
-                    JD
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Main Account</p>
-                    <p className="font-bold">Creative Director</p>
+                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
+                  <div className="flex items-center gap-4 p-4 bg-studio-card rounded-2xl border border-studio-border/30 shadow-sm">
+                    <div className="w-12 h-12 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden">
+                      {user ? (
+                        <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
+                          ?
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Account Status</p>
+                      <p className="font-bold">{user ? user.name : 'Guest Mode'}</p>
+                      {user && <p className="text-[10px] text-studio-secondary truncate max-w-[120px]">{user.email}</p>}
+                    </div>
                   </div>
                 </div>
               </header>
+
+              {/* Quick Start Actions */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div 
+                  onClick={() => setActiveTab('moodboard')}
+                  className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
+                >
+                  <div className="w-12 h-12 bg-studio-accent/10 rounded-2xl flex items-center justify-center text-studio-accent group-hover:bg-studio-accent group-hover:text-white transition-colors">
+                    <Palette className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold">1. Build Mood Board</h3>
+                    <p className="text-xs text-studio-secondary mt-1">Upload references and define your visual direction.</p>
+                  </div>
+                </div>
+                
+                <div 
+                  onClick={() => setActiveTab('generate')}
+                  className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
+                >
+                  <div className="w-12 h-12 bg-studio-accent/10 rounded-2xl flex items-center justify-center text-studio-accent group-hover:bg-studio-accent group-hover:text-white transition-colors">
+                    <Plus className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold">2. Start Creating</h3>
+                    <p className="text-xs text-studio-secondary mt-1">Generate images using your mood board as context.</p>
+                  </div>
+                </div>
+
+                <div 
+                  onClick={() => setActiveTab('showcase')}
+                  className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
+                >
+                  <div className="w-12 h-12 bg-studio-accent/10 rounded-2xl flex items-center justify-center text-studio-accent group-hover:bg-studio-accent group-hover:text-white transition-colors">
+                    <FolderHeart className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold">3. Review Showcase</h3>
+                    <p className="text-xs text-studio-secondary mt-1">Present your curated assets for client approval.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Global Search Bar */}
+              <div className="max-w-2xl mx-auto w-full space-y-4">
+                {beachArtFound && !searchResults && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between animate-in fade-in zoom-in duration-500">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-white">
+                        <CheckCircle2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-emerald-900">Beach Art Found!</p>
+                        <p className="text-[10px] text-emerald-700">I found {beachArtFound.generations.length} images and {beachArtFound.library.length} prompts related to "beach".</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        setSearchQuery('beach');
+                        setSearchResults(beachArtFound);
+                      }}
+                      className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 hover:text-emerald-800"
+                    >
+                      View Results
+                    </button>
+                  </div>
+                )}
+                <form onSubmit={handleSearch} className="relative group">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-studio-secondary group-focus-within:text-studio-accent transition-colors" />
+                  <input 
+                    type="text" 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search across all projects (e.g., 'beach art')..."
+                    className="w-full pl-12 pr-4 py-4 bg-studio-card border border-studio-border/30 rounded-2xl shadow-sm focus:ring-2 focus:ring-studio-accent/20 focus:border-studio-accent outline-none transition-all"
+                  />
+                  {isSearching && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                      <div className="w-5 h-5 border-2 border-studio-accent border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  )}
+                </form>
+              </div>
+
+              {searchResults && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-top-4 duration-500">
+                  <div className="flex justify-between items-center">
+                    <h2 className="text-xl font-bold">Search Results for "{searchQuery}"</h2>
+                    <button onClick={() => setSearchResults(null)} className="text-xs text-studio-secondary hover:text-studio-accent font-bold uppercase tracking-widest">Clear Results</button>
+                  </div>
+
+                  {searchResults.generations.length > 0 && (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold uppercase tracking-widest text-studio-secondary">Generations Found</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {searchResults.generations.map(g => (
+                          <div key={g.id} className="studio-card group cursor-pointer" onClick={() => {
+                            setCurrentProjectId(g.project_id);
+                            setActiveTab('archive');
+                            setSearchResults(null);
+                          }}>
+                            <div className="aspect-square relative overflow-hidden rounded-t-xl">
+                              <img src={g.image_data} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <span className="text-[10px] text-white font-bold uppercase">View in {g.project_name}</span>
+                              </div>
+                            </div>
+                            <div className="p-2">
+                              <p className="text-[10px] font-bold truncate">{g.idea}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {searchResults.library.length > 0 && (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold uppercase tracking-widest text-studio-secondary">Library Items Found</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {searchResults.library.map(l => (
+                          <div key={l.id} className="studio-card p-4 cursor-pointer" onClick={() => {
+                            setCurrentProjectId(l.project_id);
+                            setActiveTab('library');
+                            setSearchResults(null);
+                          }}>
+                            <p className="text-xs font-bold text-studio-accent uppercase mb-1">{l.project_name}</p>
+                            <h4 className="font-bold text-sm mb-1">{l.title}</h4>
+                            <p className="text-xs text-studio-secondary line-clamp-2">{l.prompt}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {searchResults.generations.length === 0 && searchResults.library.length === 0 && (
+                    <div className="studio-card p-10 text-center text-studio-secondary">
+                      <p>No specific items found. Try a different keyword or check your projects below.</p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Stats Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {[
                   { label: 'Total Projects', value: projects.length, icon: Layers },
-                  { label: 'Generations', value: history.length, icon: Sparkles },
-                  { label: 'Library Items', value: library.length, icon: Library },
-                  { label: 'Showcase', value: showcase.length, icon: FolderHeart }
+                  { label: 'Generations', value: projectStats.reduce((acc, s) => acc + s.generation_count, 0), icon: Sparkles },
+                  { label: 'Library Items', value: projectStats.reduce((acc, s) => acc + s.library_count, 0), icon: Library },
+                  { label: 'References', value: projectStats.reduce((acc, s) => acc + s.reference_count, 0), icon: ImageIcon }
                 ].map((stat, i) => (
                   <div key={i} className="studio-card p-6 flex items-center gap-4">
                     <div className="w-10 h-10 bg-studio-accent/10 rounded-xl flex items-center justify-center text-studio-accent">
@@ -540,36 +1094,185 @@ export default function App() {
                 ))}
               </div>
 
+              {/* Recent Generations Section */}
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold flex items-center gap-2">
+                    <History className="w-5 h-5 text-studio-accent" />
+                    Recent Generations
+                  </h2>
+                  <button 
+                    onClick={() => setActiveTab('archive')}
+                    className="text-xs text-studio-secondary font-bold uppercase tracking-widest hover:text-studio-accent"
+                  >
+                    View All Archive
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  {history.slice(0, 6).map(item => (
+                    <div 
+                      key={item.id} 
+                      className="studio-card group cursor-pointer overflow-hidden"
+                      onClick={() => {
+                        setGeneratedImage(item.image_data);
+                        setIdea(item.idea);
+                        setStructuredPrompt(JSON.parse(item.prompt_json));
+                        setActiveTab('generate');
+                      }}
+                    >
+                      <div className="aspect-square relative">
+                        <img src={item.image_data} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" referrerPolicy="no-referrer" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Eye className="w-5 h-5 text-white" />
+                        </div>
+                      </div>
+                      <div className="p-2">
+                        <p className="text-[10px] font-bold truncate">{item.idea}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {history.length === 0 && (
+                    <div className="col-span-full studio-card p-12 text-center text-studio-secondary border-dashed">
+                      <p className="text-sm">No generations yet. Start creating to see them here!</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Rescue & Debug Section */}
+              <div className="flex flex-col md:flex-row gap-6">
+                <div className="flex-1 studio-card p-8 border-studio-accent/20 bg-studio-accent/[0.02] space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-studio-accent rounded-xl flex items-center justify-center">
+                      <LifeBuoy className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold">Data Recovery</h3>
+                      <p className="text-xs text-studio-secondary">If your data seems missing after an update, use this to re-link it to your Main Workspace.</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={handleRescue}
+                      disabled={isRescuing}
+                      className="studio-btn-primary text-xs py-2 px-6"
+                    >
+                      {isRescuing ? 'Scanning Database...' : 'Run Data Rescue'}
+                    </button>
+                    <button 
+                      onClick={() => setShowDebug(!showDebug)}
+                      className="text-xs text-studio-secondary font-bold uppercase tracking-widest hover:text-studio-accent"
+                    >
+                      {showDebug ? 'Hide Debug Info' : 'Show Debug Info'}
+                    </button>
+                  </div>
+
+                  {rescueResult && (
+                    <div className="p-4 bg-white/50 rounded-xl border border-studio-border/30 text-[10px] font-mono space-y-1 animate-in fade-in zoom-in duration-300">
+                      <p className="font-bold text-studio-accent uppercase mb-2">Rescue Operation Complete</p>
+                      <p>Fixed Generations: {rescueResult.fixed.generations}</p>
+                      <p>Fixed Library: {rescueResult.fixed.library}</p>
+                      <p>Fixed Palettes: {rescueResult.fixed.palettes}</p>
+                      <p>Total Database Generations: {rescueResult.totals.generations}</p>
+                      <p className="mt-2 text-studio-secondary">All orphaned data has been moved to "Main Workspace".</p>
+                    </div>
+                  )}
+                </div>
+
+                {showDebug && (
+                  <div className="flex-1 studio-card p-8 space-y-4 animate-in slide-in-from-right-4 duration-500">
+                    <h3 className="font-bold">Database Diagnostics</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 bg-studio-bg rounded-xl">
+                        <p className="text-[10px] font-bold text-studio-secondary uppercase">Current Project ID</p>
+                        <p className="text-lg font-bold">{currentProjectId}</p>
+                      </div>
+                      <div className="p-4 bg-studio-bg rounded-xl">
+                        <p className="text-[10px] font-bold text-studio-secondary uppercase">Project Count</p>
+                        <p className="text-lg font-bold">{projects.length}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-studio-secondary italic">
+                      If "Total Database Generations" in Rescue info is higher than your current view, the data is likely in a different project.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-6">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                   <Layers className="w-5 h-5 text-studio-accent" />
                   Your Projects
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {projects.map(p => (
-                    <button 
-                      key={p.id} 
-                      onClick={() => {
-                        setCurrentProjectId(p.id);
-                        setActiveTab('project');
-                      }}
-                      className="studio-card p-8 text-left hover:border-studio-accent transition-all group"
-                    >
-                      <div className="flex justify-between items-start mb-4">
-                        <div className="w-12 h-12 bg-studio-accent/10 rounded-2xl flex items-center justify-center text-studio-accent group-hover:bg-studio-accent group-hover:text-white transition-colors">
-                          <Layers className="w-6 h-6" />
+                  {projects.map(p => {
+                    const stats = projectStats.find(s => s.id === p.id);
+                    return (
+                      <div 
+                        key={p.id} 
+                        onClick={() => {
+                          setCurrentProjectId(p.id);
+                          setActiveTab('project');
+                        }}
+                        className="studio-card p-8 text-left hover:border-studio-accent transition-all group cursor-pointer"
+                      >
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="w-12 h-12 bg-studio-accent/10 rounded-2xl flex items-center justify-center text-studio-accent group-hover:bg-studio-accent group-hover:text-white transition-colors">
+                            <Layers className="w-6 h-6" />
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            {currentProjectId === p.id && (
+                              <span className="text-[10px] bg-studio-accent text-white px-2 py-1 rounded-full font-bold uppercase tracking-widest">Active</span>
+                            )}
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingProjectId(p.id);
+                                setEditProjectName(p.name);
+                              }}
+                              className="text-[10px] text-studio-secondary hover:text-studio-accent font-bold uppercase tracking-widest"
+                            >
+                              Rename
+                            </button>
+                          </div>
                         </div>
-                        {currentProjectId === p.id && (
-                          <span className="text-[10px] bg-studio-accent text-white px-2 py-1 rounded-full font-bold uppercase tracking-widest">Active</span>
+                        {editingProjectId === p.id ? (
+                          <div className="mb-4 flex gap-2" onClick={e => e.stopPropagation()}>
+                            <input 
+                              type="text" 
+                              value={editProjectName}
+                              onChange={e => setEditProjectName(e.target.value)}
+                              className="studio-input py-1 text-sm flex-1"
+                              autoFocus
+                            />
+                            <button onClick={() => handleRenameProject(p.id)} className="text-studio-accent font-bold text-xs uppercase">Save</button>
+                            <button onClick={() => setEditingProjectId(null)} className="text-studio-secondary font-bold text-xs uppercase">Cancel</button>
+                          </div>
+                        ) : (
+                          <h3 className="text-xl font-bold mb-2">{p.name}</h3>
                         )}
+                        <p className="text-sm text-studio-secondary line-clamp-2 mb-6">{p.brief || 'No brief defined.'}</p>
+                        
+                        <div className="flex items-center gap-4 mb-6">
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-studio-secondary uppercase">
+                            <Sparkles className="w-3 h-3" /> {stats?.generation_count || 0}
+                          </div>
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-studio-secondary uppercase">
+                            <Library className="w-3 h-3" /> {stats?.library_count || 0}
+                          </div>
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-studio-secondary uppercase">
+                            <ImageIcon className="w-3 h-3" /> {stats?.reference_count || 0}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs font-bold text-studio-accent uppercase tracking-widest">
+                          Open Project <ArrowRight className="w-3 h-3" />
+                        </div>
                       </div>
-                      <h3 className="text-xl font-bold mb-2">{p.name}</h3>
-                      <p className="text-sm text-studio-secondary line-clamp-2 mb-6">{p.brief || 'No brief defined.'}</p>
-                      <div className="flex items-center gap-2 text-xs font-bold text-studio-accent uppercase tracking-widest">
-                        Open Project <ArrowRight className="w-3 h-3" />
-                      </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                   <button 
                     onClick={handleCreateProject}
                     className="studio-card p-8 border-dashed flex flex-col items-center justify-center text-studio-secondary hover:border-studio-accent hover:text-studio-accent transition-all"
@@ -586,12 +1289,39 @@ export default function App() {
 
           {activeTab === 'generate' && (
             <div className="space-y-10">
-              <header className="flex justify-between items-end">
+              <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
                 <div>
-                  <h1 className="text-4xl font-bold tracking-tight">Creative Lab</h1>
-                  <p className="text-studio-secondary mt-1">Transform concepts into visual assets.</p>
+                  <div className="flex items-center gap-3 mb-1">
+                    <h1 className="text-4xl font-bold tracking-tight">Creative Lab</h1>
+                    {selectedReferences.length > 0 && (
+                      <div className="flex items-center gap-1 px-2 py-1 bg-studio-accent/10 text-studio-accent rounded-lg text-[10px] font-bold uppercase tracking-wider animate-pulse">
+                        <Palette className="w-3 h-3" />
+                        Mood Active
+                      </div>
+                    )}
+                    <div className="h-8 w-[1px] bg-studio-border/30 mx-2 hidden md:block"></div>
+                    <select 
+                      value={currentProjectId || ''} 
+                      onChange={(e) => setCurrentProjectId(Number(e.target.value))}
+                      className="bg-studio-bg border-none text-studio-accent font-bold text-sm uppercase tracking-widest focus:ring-0 cursor-pointer hover:underline p-0"
+                    >
+                      {projects.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-studio-secondary">Transform concepts into visual assets.</p>
+                    <button 
+                      onClick={() => setActiveTab('moodboard')}
+                      className="text-[10px] text-studio-accent font-bold hover:underline flex items-center gap-1"
+                    >
+                      <ArrowLeft className="w-3 h-3" />
+                      Adjust Mood Board
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full md:w-auto">
                   <button 
                     onClick={() => {
                       setIdea('');
@@ -651,7 +1381,18 @@ export default function App() {
 
                     {parentGeneration && (
                       <div className="space-y-2">
-                        <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Refinement Feedback</label>
+                        <div className="flex justify-between items-center">
+                          <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Refinement Feedback</label>
+                          <button 
+                            onClick={() => {
+                              setParentGeneration(null);
+                              setFeedback('');
+                            }}
+                            className="text-[10px] text-red-500 font-bold hover:underline"
+                          >
+                            Cancel Refinement
+                          </button>
+                        </div>
                         <textarea 
                           value={feedback}
                           onChange={(e) => setFeedback(e.target.value)}
@@ -750,7 +1491,21 @@ export default function App() {
                         <p className="text-sm font-medium text-studio-secondary">Synthesizing visual data...</p>
                       </div>
                     ) : generatedImage ? (
-                      <img src={generatedImage} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                      <div className="w-full h-full relative group">
+                        <img src={generatedImage} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                        <div className="absolute bottom-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => {
+                              const gen = batchResults.find(r => r.image_data === generatedImage) || history.find(r => r.image_data === generatedImage);
+                              if (gen) handleRefine(gen);
+                            }}
+                            className="bg-white/90 backdrop-blur-md text-studio-text px-6 py-3 rounded-2xl shadow-2xl border border-white/20 flex items-center gap-2 font-bold text-sm hover:bg-studio-accent hover:text-white transition-all"
+                          >
+                            <Wand2 className="w-4 h-4" />
+                            Rework this Version
+                          </button>
+                        </div>
+                      </div>
                     ) : (
                       <div className="text-center space-y-4 opacity-20">
                         <ImageIcon className="w-20 h-20 mx-auto" />
@@ -788,6 +1543,13 @@ export default function App() {
                                 title="Save to Gallery"
                               >
                                 <FolderHeart className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => saveToLibrary(res)}
+                                className="p-2 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
+                                title="Save to Library"
+                              >
+                                <Library className="w-4 h-4" />
                               </button>
                             </div>
                             <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[8px] px-1 rounded">
@@ -853,6 +1615,28 @@ export default function App() {
                   </button>
                 </div>
 
+                {history.length > 0 && (
+                  <div className="studio-card p-10 space-y-6">
+                    <h3 className="font-bold flex items-center gap-2">
+                      <History className="w-5 h-5 text-studio-accent" />
+                      Recent Work in this Project
+                    </h3>
+                    <div className="grid grid-cols-3 gap-4">
+                      {history.slice(0, 3).map(item => (
+                        <div key={item.id} className="aspect-square rounded-lg overflow-hidden bg-studio-bg">
+                          <img src={item.image_data} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        </div>
+                      ))}
+                    </div>
+                    <button 
+                      onClick={() => setActiveTab('archive')}
+                      className="text-xs text-studio-accent font-bold uppercase tracking-widest"
+                    >
+                      View Full Project Archive
+                    </button>
+                  </div>
+                )}
+
                 <div className="studio-card p-10 space-y-6 border-studio-accent/20 bg-studio-accent/[0.02]">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-studio-accent rounded-xl flex items-center justify-center">
@@ -880,7 +1664,7 @@ export default function App() {
                     disabled={isGeneratingMoodboard || !vibeInput}
                     className="studio-btn-secondary w-full border-studio-accent text-studio-accent hover:bg-studio-accent hover:text-white"
                   >
-                    {isGeneratingMoodboard ? 'Synthesizing Vibe...' : 'Generate Moodboard & Library'}
+                    {isGeneratingMoodboard ? 'Synthesizing Vibe...' : 'Generate Mood Board & Library'}
                   </button>
                 </div>
 
@@ -950,6 +1734,13 @@ export default function App() {
                   <p className="text-studio-secondary mt-1">Your categorized collection of creative starters.</p>
                 </div>
                 <div className="flex gap-2">
+                  <button 
+                    onClick={handleCSVExport}
+                    className="studio-btn-secondary flex items-center gap-2"
+                  >
+                    <Copy className="w-4 h-4" />
+                    Export CSV
+                  </button>
                   <button 
                     onClick={() => csvUploadRef.current?.click()}
                     className="studio-btn-secondary flex items-center gap-2"
@@ -1028,7 +1819,7 @@ export default function App() {
                         <button 
                           onClick={() => handleBranch(item)}
                           className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
-                          title="Branch from this"
+                          title="Rework & Iterate"
                         >
                           <GitBranch className="w-5 h-5" />
                         </button>
@@ -1046,12 +1837,26 @@ export default function App() {
                         >
                           <FolderHeart className="w-5 h-5" />
                         </button>
+                        <button 
+                          onClick={() => saveToLibrary(item)}
+                          className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
+                          title="Save Prompt to Library"
+                        >
+                          <Library className="w-5 h-5" />
+                        </button>
                       </div>
                     </div>
                     <div className="p-4">
                       <div className="flex justify-between items-start">
-                        <p className="text-sm font-semibold truncate flex-1">{item.idea}</p>
-                        {item.parent_id && <GitBranch className="w-3 h-3 text-studio-accent ml-2" />}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{item.idea}</p>
+                          {item.parent_id && (
+                            <div className="flex items-center gap-1 mt-1 text-[10px] text-studio-accent font-medium">
+                              <GitBranch className="w-3 h-3" />
+                              <span className="truncate">Branched from ID: {item.parent_id}</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <p className="text-[10px] text-studio-secondary mt-1">{new Date(item.created_at).toLocaleDateString()}</p>
                     </div>
@@ -1065,9 +1870,19 @@ export default function App() {
             <div className="space-y-12">
               <header className="flex justify-between items-end">
                 <div>
-                  <h1 className="text-4xl font-bold tracking-tight">Moodboard</h1>
+                  <h1 className="text-4xl font-bold tracking-tight">Mood Board</h1>
                   <p className="text-studio-secondary mt-1">Visual references and color inspiration.</p>
                 </div>
+                <button 
+                  onClick={() => {
+                    setSelectedReferences(references.map(r => r.id));
+                    setActiveTab('generate');
+                  }}
+                  className="studio-btn-primary flex items-center gap-2"
+                >
+                  <Plus className="w-5 h-5" />
+                  Start Creating
+                </button>
               </header>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">

@@ -70,6 +70,13 @@ export interface ProjectSettings {
   updated_at: string;
 }
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
 export const api = {
   getProjects: async (): Promise<ProjectSettings[]> => {
     const res = await fetch("/api/projects");
@@ -104,6 +111,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.details || errorData.error || `Failed to save generation: ${res.status}`);
+    }
     return res.json();
   },
   deleteGeneration: async (id: number): Promise<void> => {
@@ -174,8 +185,8 @@ export const api = {
     return res.json();
   },
   // Prompt Library
-  getLibrary: async (projectId: number): Promise<PromptLibraryItem[]> => {
-    const res = await fetch(`/api/library?projectId=${projectId}`);
+  getLibrary: async (): Promise<PromptLibraryItem[]> => {
+    const res = await fetch("/api/library");
     return res.json();
   },
   saveLibraryItem: async (data: Omit<PromptLibraryItem, "id" | "created_at">): Promise<{ id: number }> => {
@@ -186,14 +197,61 @@ export const api = {
     });
     return res.json();
   },
-  importLibrary: async (items: Omit<PromptLibraryItem, "id" | "created_at">[], project_id?: number): Promise<void> => {
+  importLibrary: async (items: Omit<PromptLibraryItem, "id" | "created_at">[]): Promise<void> => {
     await fetch("/api/library/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, project_id }),
+      body: JSON.stringify({ items }),
     });
   },
   deleteLibraryItem: async (id: number): Promise<void> => {
     await fetch(`/api/library/${id}`, { method: "DELETE" });
+  },
+  globalSearch: async (query: string): Promise<{ generations: any[]; library: any[]; projects: any[] }> => {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    return res.json();
+  },
+  getProjectStats: async (): Promise<any[]> => {
+    const res = await fetch("/api/projects/stats");
+    return res.json();
+  },
+  rescueData: async (): Promise<any> => {
+    const res = await fetch("/api/rescue");
+    return res.json();
+  },
+  exportWorkspace: async (): Promise<any> => {
+    const res = await fetch("/api/export");
+    return res.json();
+  },
+  importWorkspace: async (data: any): Promise<void> => {
+    const res = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error("Import failed");
+  },
+  purgeServer: async (): Promise<void> => {
+    const res = await fetch("/api/purge", { method: "POST" });
+    if (!res.ok) throw new Error("Purge failed");
+  },
+  getAuthUrl: async (): Promise<{ url: string }> => {
+    const res = await fetch("/api/auth/url");
+    return res.json();
+  },
+  getMe: async (): Promise<AuthUser | null> => {
+    const res = await fetch("/api/me");
+    return res.json();
+  },
+  logout: async (): Promise<void> => {
+    await fetch("/api/logout", { method: "POST" });
+  },
+  syncToGCS: async (): Promise<void> => {
+    const res = await fetch("/api/sync", { method: "POST" });
+    if (!res.ok) throw new Error("Sync failed");
+  },
+  restoreFromGCS: async (): Promise<void> => {
+    const res = await fetch("/api/restore", { method: "POST" });
+    if (!res.ok) throw new Error("Restore failed");
   }
 };

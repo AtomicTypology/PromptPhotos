@@ -11,12 +11,17 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
     "@google/genai": "^1.44.0",
+    "@supabase/supabase-js": "^2.99.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.6.2",
+    "cookie-session": "^2.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.22.1",
+    "google-auth-library": "^10.6.1",
+    "idb-keyval": "^6.2.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.35.1",
     "react": "^19.0.0",

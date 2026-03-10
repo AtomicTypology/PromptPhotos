@@ -1,8 +1,8 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 
 const getAI = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Gemini API key is not set. Please select an API key.");
   return new GoogleGenAI({ apiKey });
 };
 
@@ -122,11 +122,12 @@ export const generateImage = async (structuredPrompt: StructuredPrompt, referenc
   }
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-image",
-    contents: [{ parts }],
+    model: "gemini-3.1-flash-image-preview",
+    contents: { parts },
     config: {
       imageConfig: {
         aspectRatio: structuredPrompt.aspect_ratio || "1:1",
+        imageSize: "1K"
       }
     }
   });
