@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { Storage } from "@google-cloud/storage";
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth/index.js";
+import { GoogleGenAI, Type } from "@google/genai";
 
 function getUserId(req: express.Request): string | null {
   return (req.user as any)?.claims?.sub || null;
@@ -1031,6 +1032,191 @@ async function startServer() {
       res.status(500).json({ error: "Restore failed" });
     }
   });
+
+  // ─── Gemini AI Routes ───────────────────────────────────────────────────────
+
+  const getAI = () => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+    return new GoogleGenAI({ apiKey });
+  };
+
+  app.post("/api/ai/generate-prompt", async (req, res) => {
+    try {
+      const { idea, projectContext, parentPrompt, feedback } = req.body;
+      const ai = getAI();
+
+      let systemInstruction = projectContext
+        ? `You are a creative engineer for a project with the following brief: "${projectContext.brief}". The global visual style is: "${projectContext.global_style}". All prompts must adhere to this project identity.`
+        : "You are a creative engineer converting ideas into structured image prompts.";
+
+      if (parentPrompt) {
+        systemInstruction += `\nThis is a refinement of: ${JSON.stringify(parentPrompt)}.`;
+        if (feedback) systemInstruction += `\nApply this feedback: "${feedback}".`;
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: `Convert this image idea into a structured JSON prompt: "${idea}".`,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              prompt: { type: Type.STRING },
+              style: { type: Type.STRING },
+              lighting: { type: Type.STRING },
+              camera: { type: Type.OBJECT, properties: { lens: { type: Type.STRING }, depth_of_field: { type: Type.STRING } } },
+              composition: { type: Type.OBJECT, properties: { framing: { type: Type.STRING }, angle: { type: Type.STRING } } },
+              color_grading: { type: Type.STRING },
+              aspect_ratio: { type: Type.STRING, enum: ["1:1", "3:4", "4:3", "9:16", "16:9"] },
+              negative_prompt: { type: Type.STRING }
+            },
+            required: ["prompt", "style", "lighting"]
+          }
+        }
+      });
+
+      res.json(JSON.parse(response.text || "{}"));
+    } catch (err: any) {
+      console.error("generate-prompt error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate prompt" });
+    }
+  });
+
+  app.post("/api/ai/generate-image", async (req, res) => {
+    try {
+      const { structuredPrompt, referenceImages } = req.body;
+      const ai = getAI();
+
+      const fullPrompt = [
+        `Subject: ${structuredPrompt.prompt}`,
+        `Style: ${structuredPrompt.style}`,
+        `Lighting: ${structuredPrompt.lighting}`,
+        structuredPrompt.camera?.lens ? `Camera: ${structuredPrompt.camera.lens}, ${structuredPrompt.camera.depth_of_field}` : "",
+        structuredPrompt.composition?.framing ? `Composition: ${structuredPrompt.composition.framing}, ${structuredPrompt.composition.angle}` : "",
+        structuredPrompt.color_grading ? `Color Grading: ${structuredPrompt.color_grading}` : "",
+        structuredPrompt.negative_prompt ? `Negative Prompt: ${structuredPrompt.negative_prompt}` : ""
+      ].filter(Boolean).join("\n");
+
+      const parts: any[] = [{ text: fullPrompt }];
+
+      if (referenceImages?.length) {
+        referenceImages.forEach((img: string) => {
+          parts.push({ inlineData: { data: img.split(",")[1], mimeType: "image/png" } });
+        });
+        parts.push({ text: "Use the provided images as visual references for style, composition, and mood." });
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-image-preview",
+        contents: { parts },
+        config: {
+          imageConfig: {
+            aspectRatio: structuredPrompt.aspect_ratio || "1:1",
+            imageSize: "1K"
+          }
+        }
+      });
+
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+        }
+      }
+
+      res.status(500).json({ error: "No image generated" });
+    } catch (err: any) {
+      console.error("generate-image error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate image" });
+    }
+  });
+
+  app.post("/api/ai/generate-moodboard", async (req, res) => {
+    try {
+      const { vibe } = req.body;
+      const ai = getAI();
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: `Generate a moodboard for the vibe: "${vibe}".`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              palette: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  colors: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ["name", "colors"]
+              },
+              visual_language: { type: Type.STRING },
+              reference_prompts: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["palette", "visual_language", "reference_prompts"]
+          }
+        }
+      });
+
+      res.json(JSON.parse(response.text || "{}"));
+    } catch (err: any) {
+      console.error("generate-moodboard error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate moodboard" });
+    }
+  });
+
+  app.post("/api/ai/critique", async (req, res) => {
+    try {
+      const { imageData, originalPrompt } = req.body;
+      const ai = getAI();
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: [{
+          parts: [
+            { inlineData: { data: imageData.split(",")[1], mimeType: "image/png" } },
+            { text: `Analyze this generated image against its prompt: ${JSON.stringify(originalPrompt)}. Provide a critique and a refined prompt to improve it.` }
+          ]
+        }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              analysis: { type: Type.STRING },
+              suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              refined_prompt: {
+                type: Type.OBJECT,
+                properties: {
+                  prompt: { type: Type.STRING },
+                  style: { type: Type.STRING },
+                  lighting: { type: Type.STRING },
+                  camera: { type: Type.OBJECT, properties: { lens: { type: Type.STRING }, depth_of_field: { type: Type.STRING } } },
+                  composition: { type: Type.OBJECT, properties: { framing: { type: Type.STRING }, angle: { type: Type.STRING } } },
+                  color_grading: { type: Type.STRING },
+                  aspect_ratio: { type: Type.STRING, enum: ["1:1", "3:4", "4:3", "9:16", "16:9"] },
+                  negative_prompt: { type: Type.STRING }
+                },
+                required: ["prompt", "style", "lighting"]
+              }
+            },
+            required: ["analysis", "suggestions", "refined_prompt"]
+          }
+        }
+      });
+
+      res.json(JSON.parse(response.text || "{}"));
+    } catch (err: any) {
+      console.error("critique error:", err);
+      res.status(500).json({ error: err.message || "Failed to critique image" });
+    }
+  });
+
+  // ─── End Gemini AI Routes ────────────────────────────────────────────────────
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
