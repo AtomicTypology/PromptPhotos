@@ -75,6 +75,8 @@ export interface AuthUser {
   email: string;
   name: string;
   picture: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 const handleResponse = async (res: Response) => {
@@ -251,17 +253,10 @@ export const api = {
     const res = await fetch("/api/purge", { method: "POST" });
     await handleResponse(res);
   },
-  getAuthUrl: async (): Promise<{ url: string }> => {
-    const res = await fetch("/api/auth/url");
-    return handleResponse(res);
-  },
   getMe: async (): Promise<AuthUser | null> => {
-    const res = await fetch("/api/me");
+    const res = await fetch("/api/auth/user");
+    if (res.status === 401) return null;
     return handleResponse(res);
-  },
-  logout: async (): Promise<void> => {
-    const res = await fetch("/api/logout", { method: "POST" });
-    await handleResponse(res);
   },
   syncToGCS: async (): Promise<void> => {
     const res = await fetch("/api/sync", { method: "POST" });

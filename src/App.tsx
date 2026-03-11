@@ -147,41 +147,12 @@ export default function App() {
     fetchUser();
   }, []);
 
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
-    try {
-      const { url } = await api.getAuthUrl();
-      const authWindow = window.open(url, 'google_oauth', 'width=600,height=700');
-      
-      if (!authWindow) {
-        alert('Please allow popups to sign in with Google');
-        return;
-      }
-
-      const handleMessage = async (event: MessageEvent) => {
-        if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-          const userData = await api.getMe();
-          setUser(userData);
-          window.removeEventListener('message', handleMessage);
-          loadInitialData();
-        }
-      };
-      window.addEventListener('message', handleMessage);
-    } catch (error) {
-      console.error("Login failed:", error);
-    } finally {
-      setIsLoggingIn(false);
-    }
+  const handleLogin = () => {
+    window.location.href = '/api/login';
   };
 
-  const handleLogout = async () => {
-    try {
-      await api.logout();
-      setUser(null);
-      loadInitialData();
-    } catch (error) {
-      console.error("Logout failed:", error);
-    }
+  const handleLogout = () => {
+    window.location.href = '/api/logout';
   };
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -859,7 +830,7 @@ export default function App() {
               onClick={handleLogin}
               disabled={isLoggingIn}
               className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
-              title="Sign in with Google"
+              title="Sign in with Replit"
             >
               <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
                 {isLoggingIn ? '...' : <User className="w-5 h-5" />}

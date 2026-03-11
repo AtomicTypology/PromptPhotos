@@ -11,7 +11,7 @@ An AI-powered creative workspace for generating, refining, and managing image pr
   - Local: SQLite (`better-sqlite3`) for ephemeral/local dev
   - Cloud: Supabase (PostgreSQL) for persistent multi-user storage
 - **AI:** Google Gemini SDK (`@google/genai`)
-- **Auth:** Google OAuth 2.0
+- **Auth:** Replit Auth (OpenID Connect via passport)
 - **Storage:** Google Cloud Storage (GCS) for workspace backups
 
 ## Project Structure
@@ -24,6 +24,7 @@ An AI-powered creative workspace for generating, refining, and managing image pr
 │   ├── services/         # API client and Gemini AI logic
 │   ├── App.tsx           # Main app component
 │   └── main.tsx          # Entry point
+├── replit_integrations/   # Replit Auth module (OIDC + passport)
 ├── server.ts             # Express backend (API + Vite middleware)
 ├── supabase_schema.sql   # Supabase/Postgres schema
 ├── vite.config.ts        # Vite configuration
@@ -47,9 +48,9 @@ See `.env.example` for all available configuration:
 
 - `GEMINI_API_KEY` — Google Gemini API key for AI features
 - `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` — Supabase credentials
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — Google OAuth
+- `SESSION_SECRET` — Express session secret (provided by Replit)
+- `DATABASE_URL` — PostgreSQL connection for session storage (provided by Replit)
 - `GCS_BUCKET_NAME` — Google Cloud Storage bucket
-- `SESSION_SECRET` — Cookie session secret
 
 Without Supabase configured, the app falls back to local SQLite storage.
 

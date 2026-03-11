@@ -7,14 +7,10 @@ import { createClient } from "@supabase/supabase-js";
 import { Storage } from "@google-cloud/storage";
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth/index.js";
 
-declare global {
-  namespace Express {
-    interface Request {
-      session: any;
-      user?: any;
-    }
-  }
+function getUserId(req: express.Request): string | null {
+  return (req.user as any)?.claims?.sub || null;
 }
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -205,7 +201,7 @@ async function loadFromGCS(userId: string) {
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
   
-  if (!req.session?.user && !isGuestAllowed) {
+  if (!getUserId(req) && !isGuestAllowed) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -235,140 +231,46 @@ async function startServer() {
     const app = express();
     const PORT = process.env.PORT ? parseInt(process.env.PORT) : 5000;
 
-    app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
-    app.use(cookieSession({
-      name: 'session',
-      keys: [sessionSecret],
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      secure: true,
-      sameSite: 'none'
-    }));
 
-  // Auth Routes
-  app.get("/api/auth/debug", (req, res) => {
-    const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
-    res.json({
-      envAppUrl: process.env.APP_URL || "NOT SET",
-      reqProtocol: req.protocol,
-      reqHost: req.get('host'),
-      xForwardedProto: req.get('x-forwarded-proto'),
-      baseUrl,
-      normalizedBaseUrl,
-      redirectUri: `${normalizedBaseUrl}/auth/callback`,
-      googleClientId: googleClientId ? `${googleClientId.substring(0, 10)}...${googleClientId.substring(googleClientId.length - 10)}` : "MISSING",
-      googleClientSecret: googleClientSecret ? "SET" : "MISSING",
-      sessionSecret: sessionSecret === "prompt-studio-secret" ? "DEFAULT" : "CUSTOM"
-    });
-  });
+    await setupAuth(app);
+    registerAuthRoutes(app);
 
-  app.get("/api/auth/url", (req, res) => {
-    if (!oauth2Client) {
-      return res.status(500).json({ error: "Google OAuth not configured" });
-    }
-    let baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-    // Remove trailing slash if present
-    baseUrl = baseUrl.replace(/\/$/, "");
-    const redirectUri = `${baseUrl}/auth/callback`;
-    console.log("DEBUG: Generating Auth URL with redirectUri:", redirectUri);
-    console.log("DEBUG: APP_URL env:", process.env.APP_URL);
-    const url = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
-      redirect_uri: redirectUri
-    });
-    res.json({ url });
-  });
+    app.use(async (req: any, _res, next) => {
+      if (req.isAuthenticated && req.isAuthenticated() && req.user?.claims && supabase) {
+        const claims = req.user.claims;
+        const userId = claims.sub;
+        if (userId && !req._supabaseUpsertDone) {
+          req._supabaseUpsertDone = true;
+          try {
+            await supabase.from('users').upsert({
+              id: userId,
+              email: claims.email,
+              name: [claims.first_name, claims.last_name].filter(Boolean).join(" ") || claims.email,
+              picture: claims.profile_image_url
+            });
 
-  app.get("/auth/callback", async (req, res) => {
-    const { code } = req.query;
-    if (!oauth2Client || !code) {
-      return res.status(400).send("Invalid request");
-    }
+            const { data: projects } = await supabase
+              .from('project_settings')
+              .select('id')
+              .eq('user_id', userId)
+              .limit(1);
 
-    try {
-      let baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-      // Remove trailing slash if present
-      baseUrl = baseUrl.replace(/\/$/, "");
-      const redirectUri = `${baseUrl}/auth/callback`;
-      const { tokens } = await oauth2Client.getToken({
-        code: code as string,
-        redirect_uri: redirectUri
-      });
-      oauth2Client.setCredentials(tokens);
-
-      const ticket = await oauth2Client.verifyIdToken({
-        idToken: tokens.id_token!,
-        audience: googleClientId,
-      });
-      const payload = ticket.getPayload();
-
-      if (req.session) {
-        req.session.user = {
-          id: payload?.sub,
-          email: payload?.email,
-          name: payload?.name,
-          picture: payload?.picture
-        };
-      }
-
-      // Multi-user initialization
-      if (supabase && payload?.sub) {
-        // 1. Upsert user
-        await supabase.from('users').upsert({
-          id: payload.sub,
-          email: payload.email,
-          name: payload.name,
-          picture: payload.picture
-        });
-
-        // 2. Ensure default project exists for this user
-        const { data: projects } = await supabase
-          .from('project_settings')
-          .select('id')
-          .eq('user_id', payload.sub)
-          .limit(1);
-
-        if (!projects || projects.length === 0) {
-          await supabase.from('project_settings').insert({
-            user_id: payload.sub,
-            name: 'Main Workspace',
-            brief: 'Your primary creative environment.',
-            global_style: 'Modern, Clean, Minimalist'
-          });
+            if (!projects || projects.length === 0) {
+              await supabase.from('project_settings').insert({
+                user_id: userId,
+                name: 'Main Workspace',
+                brief: 'Your primary creative environment.',
+                global_style: 'Modern, Clean, Minimalist'
+              });
+            }
+          } catch (err) {
+            console.error("Supabase user upsert failed:", err);
+          }
         }
       }
-
-      res.send(`
-        <html>
-          <body>
-            <script>
-              if (window.opener) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-                window.close();
-              } else {
-                window.location.href = '/';
-              }
-            </script>
-            <p>Authentication successful. This window should close automatically.</p>
-          </body>
-        </html>
-      `);
-    } catch (error) {
-      console.error("OAuth callback error:", error);
-      res.status(500).send("Authentication failed");
-    }
-  });
-
-  app.get("/api/me", (req, res) => {
-    res.json(req.session?.user || null);
-  });
-
-  app.post("/api/logout", (req, res) => {
-    req.session = null;
-    res.json({ success: true });
-  });
+      next();
+    });
 
   // Ensure all data is linked to a valid project
   db.exec(`
@@ -382,7 +284,7 @@ async function startServer() {
 
   // Global Search
   app.get("/api/search", requireAuth, (req, res) => {
-    const userId = req.session?.user?.id || null;
+    const userId = getUserId(req);
     const query = `%${req.query.q || ''}%`;
     const results = {
       generations: db.prepare(`
@@ -404,7 +306,7 @@ async function startServer() {
 
   // Project Stats
   app.get("/api/projects/stats", requireAuth, async (req, res) => {
-    const userId = req.session?.user?.id || null;
+    const userId = getUserId(req);
     if (supabase && userId) {
       const { data: stats, error } = await supabase
         .from('project_settings')
@@ -446,7 +348,7 @@ async function startServer() {
   // API Routes
 
   app.get("/api/generations", requireAuth, async (req, res) => {
-    const userId = req.session?.user?.id || null;
+    const userId = getUserId(req);
     const projectId = parseInt(req.query.projectId as string) || 1;
     
     if (supabase && userId) {
@@ -472,7 +374,7 @@ async function startServer() {
 
   app.post("/api/generations", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = getUserId(req)!;
       const { idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references } = req.body;
       
       if (!image_data) {
@@ -520,7 +422,7 @@ async function startServer() {
   });
 
   app.get("/api/styles", requireAuth, async (req, res) => {
-    const userId = req.session?.user?.id || null;
+    const userId = getUserId(req);
     const projectId = parseInt(req.query.projectId as string) || 1;
     if (supabase && userId) {
       const { data, error } = await supabase
@@ -537,7 +439,7 @@ async function startServer() {
   });
 
   app.post("/api/styles", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     const { name, style_json, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -557,7 +459,7 @@ async function startServer() {
   // Palettes
   app.get("/api/palettes", requireAuth, async (req, res) => {
     try {
-      const userId = req.session?.user?.id || null;
+      const userId = getUserId(req);
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data, error } = await supabase
@@ -583,7 +485,7 @@ async function startServer() {
 
   app.post("/api/palettes", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = getUserId(req)!;
       const { name, image_data, project_id } = req.body;
       
       let imageUrl = null;
@@ -618,7 +520,7 @@ async function startServer() {
   // References
   app.get("/api/references", requireAuth, async (req, res) => {
     try {
-      const userId = req.session?.user?.id || null;
+      const userId = getUserId(req);
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data, error } = await supabase
@@ -640,7 +542,7 @@ async function startServer() {
 
   app.post("/api/references", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = getUserId(req)!;
       const { name, image_data, project_id } = req.body;
       if (supabase) {
         const { data, error } = await supabase
@@ -662,7 +564,7 @@ async function startServer() {
   // Showcase
   app.get("/api/showcase", requireAuth, async (req, res) => {
     try {
-      const userId = req.session?.user?.id || null;
+      const userId = getUserId(req);
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data: showcase, error } = await supabase
@@ -724,7 +626,7 @@ async function startServer() {
   });
 
   app.post("/api/showcase", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     const { type, item_id, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -740,7 +642,7 @@ async function startServer() {
   });
 
   app.post("/api/showcase/:id/star", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     if (supabase) {
       // Get current state
       const { data: current } = await supabase.from('showcase').select('starred').eq('id', req.params.id).eq('user_id', userId).single();
@@ -794,7 +696,7 @@ async function startServer() {
   // Project Settings
   app.get("/api/projects", requireAuth, async (req, res) => {
     try {
-      const userId = req.session?.user?.id || null;
+      const userId = getUserId(req);
       if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
@@ -814,7 +716,7 @@ async function startServer() {
 
   app.get("/api/projects/:id", requireAuth, async (req, res) => {
     try {
-      const userId = req.session?.user?.id || null;
+      const userId = getUserId(req);
       if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
@@ -835,7 +737,7 @@ async function startServer() {
 
   app.post("/api/projects", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = getUserId(req)!;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { data, error } = await supabase
@@ -857,7 +759,7 @@ async function startServer() {
 
   app.post("/api/projects/:id", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = getUserId(req)!;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { error } = await supabase
@@ -878,7 +780,7 @@ async function startServer() {
   });
 
   app.delete("/api/generations/:id", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     if (supabase) {
       const { error } = await supabase.from('generations').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
@@ -890,7 +792,7 @@ async function startServer() {
 
   // Prompt Library
   app.get("/api/library", requireAuth, async (req, res) => {
-    const userId = req.session?.user?.id || null;
+    const userId = getUserId(req);
     if (supabase && userId) {
       const { data, error } = await supabase
         .from('prompt_library')
@@ -906,7 +808,7 @@ async function startServer() {
   });
 
   app.post("/api/library", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     const { category, title, prompt } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -923,7 +825,7 @@ async function startServer() {
   });
 
   app.post("/api/library/import", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     const { items } = req.body;
     
     if (supabase) {
@@ -951,7 +853,7 @@ async function startServer() {
   });
 
   app.delete("/api/library/:id", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     if (supabase) {
       const { error } = await supabase.from('prompt_library').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
@@ -963,7 +865,7 @@ async function startServer() {
 
   // Privacy: Purge Server Database
   app.post("/api/purge", requireAuth, (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     try {
       db.prepare("DELETE FROM showcase WHERE user_id = ?").run(userId);
       db.prepare("DELETE FROM references_images WHERE user_id = ?").run(userId);
@@ -982,7 +884,7 @@ async function startServer() {
 
   // Export/Import
   app.get("/api/export", requireAuth, (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     try {
       const data = {
         projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
@@ -1000,7 +902,7 @@ async function startServer() {
   });
 
   app.post("/api/import", requireAuth, (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     try {
       const data = req.body;
       const transaction = db.transaction((data) => {
@@ -1064,7 +966,7 @@ async function startServer() {
   });
 
   app.post("/api/sync", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     try {
       const data = {
         projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
@@ -1084,7 +986,7 @@ async function startServer() {
   });
 
   app.post("/api/restore", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = getUserId(req)!;
     try {
       const data = await loadFromGCS(userId);
       if (!data) {
