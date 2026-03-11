@@ -1110,7 +1110,7 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-flash-image-preview",
+        model: "nano-banana-pro-preview",
         contents: [{ parts }],
         config: {
           responseModalities: ["IMAGE", "TEXT"]
