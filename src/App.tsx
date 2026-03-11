@@ -42,6 +42,7 @@ import {
 import { get, set } from 'idb-keyval';
 import { generateStructuredPrompt, generateImage, StructuredPrompt, generateMoodboard, Moodboard, critiqueImage, Critique } from './services/gemini';
 import { api, Generation, StyleTemplate, Palette as PaletteType, ReferenceImage, ShowcaseItem, Comment, ProjectSettings, PromptLibraryItem, AuthUser } from './services/api';
+import { LandingPage } from './components/LandingPage';
 
 declare global {
   interface Window {
@@ -780,6 +781,18 @@ export default function App() {
       setIsRescuing(false);
     }
   };
+
+  const [isGuest, setIsGuest] = useState(false);
+
+  if (!user && !isGuest) {
+    return (
+      <LandingPage 
+        onLogin={handleLogin} 
+        isLoggingIn={isLoggingIn} 
+        onContinueAsGuest={() => setIsGuest(true)} 
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-studio-bg">

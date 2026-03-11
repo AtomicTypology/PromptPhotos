@@ -213,7 +213,9 @@ async function loadFromGCS(userId: string) {
 }
 
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!req.session?.user) {
+  const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
+  
+  if (!req.session?.user && !isGuestAllowed) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -239,24 +241,30 @@ async function uploadToSupabase(base64Data: string, bucketName: string, fileName
 }
 
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
+  try {
+    const app = express();
+    const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
-  app.use(cookieSession({
-    name: 'session',
-    keys: [sessionSecret],
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    secure: true,
-    sameSite: 'none'
-  }));
+    app.use(express.json({ limit: '50mb' }));
+    app.use(cookieSession({
+      name: 'session',
+      keys: [sessionSecret],
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      secure: true,
+      sameSite: 'none'
+    }));
 
   // Auth Routes
   app.get("/api/auth/url", (req, res) => {
     if (!oauth2Client) {
       return res.status(500).json({ error: "Google OAuth not configured" });
     }
-    const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
+    let baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+    // Remove trailing slash if present
+    baseUrl = baseUrl.replace(/\/$/, "");
+    const redirectUri = `${baseUrl}/auth/callback`;
+    console.log("DEBUG: Generating Auth URL with redirectUri:", redirectUri);
+    console.log("DEBUG: APP_URL env:", process.env.APP_URL);
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
@@ -272,7 +280,10 @@ async function startServer() {
     }
 
     try {
-      const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
+      let baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+      // Remove trailing slash if present
+      baseUrl = baseUrl.replace(/\/$/, "");
+      const redirectUri = `${baseUrl}/auth/callback`;
       const { tokens } = await oauth2Client.getToken({
         code: code as string,
         redirect_uri: redirectUri
@@ -363,30 +374,30 @@ async function startServer() {
 
   // Global Search
   app.get("/api/search", requireAuth, (req, res) => {
-    const userId = req.session.user.id;
+    const userId = req.session?.user?.id || null;
     const query = `%${req.query.q || ''}%`;
     const results = {
       generations: db.prepare(`
         SELECT g.*, COALESCE(p.name, 'Unknown Project') as project_name 
         FROM generations g 
         LEFT JOIN project_settings p ON g.project_id = p.id 
-        WHERE (g.idea LIKE ? OR g.prompt_json LIKE ?) AND g.user_id = ?
+        WHERE (g.idea LIKE ? OR g.prompt_json LIKE ?) AND g.user_id IS ?
       `).all(query, query, userId),
       library: db.prepare(`
         SELECT l.*, COALESCE(p.name, 'Unknown Project') as project_name 
         FROM prompt_library l 
         LEFT JOIN project_settings p ON l.project_id = p.id 
-        WHERE (l.title LIKE ? OR l.prompt LIKE ?) AND l.user_id = ?
+        WHERE (l.title LIKE ? OR l.prompt LIKE ?) AND l.user_id IS ?
       `).all(query, query, userId),
-      projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id = ?").all(query, query, userId)
+      projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id IS ?").all(query, query, userId)
     };
     res.json(results);
   });
 
   // Project Stats
   app.get("/api/projects/stats", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
-    if (supabase) {
+    const userId = req.session?.user?.id || null;
+    if (supabase && userId) {
       const { data: stats, error } = await supabase
         .from('project_settings')
         .select(`
@@ -415,11 +426,11 @@ async function startServer() {
       SELECT 
         p.id,
         p.name,
-        (SELECT COUNT(*) FROM generations WHERE project_id = p.id AND user_id = ?) as generation_count,
-        (SELECT COUNT(*) FROM prompt_library WHERE project_id = p.id AND user_id = ?) as library_count,
-        (SELECT COUNT(*) FROM references_images WHERE project_id = p.id AND user_id = ?) as reference_count
+        (SELECT COUNT(*) FROM generations WHERE project_id = p.id AND user_id IS ?) as generation_count,
+        (SELECT COUNT(*) FROM prompt_library WHERE project_id = p.id AND user_id IS ?) as library_count,
+        (SELECT COUNT(*) FROM references_images WHERE project_id = p.id AND user_id IS ?) as reference_count
       FROM project_settings p
-      WHERE p.user_id = ?
+      WHERE p.user_id IS ?
     `).all(userId, userId, userId, userId);
     res.json(stats);
   });
@@ -427,10 +438,10 @@ async function startServer() {
   // API Routes
 
   app.get("/api/generations", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = req.session?.user?.id || null;
     const projectId = parseInt(req.query.projectId as string) || 1;
     
-    if (supabase) {
+    if (supabase && userId) {
       const { data, error } = await supabase
         .from('generations')
         .select('*')
@@ -447,7 +458,7 @@ async function startServer() {
       return res.json(mapped);
     }
 
-    const rows = db.prepare("SELECT * FROM generations WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
+    const rows = db.prepare("SELECT * FROM generations WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
     res.json(rows);
   });
 
@@ -501,9 +512,9 @@ async function startServer() {
   });
 
   app.get("/api/styles", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
+    const userId = req.session?.user?.id || null;
     const projectId = parseInt(req.query.projectId as string) || 1;
-    if (supabase) {
+    if (supabase && userId) {
       const { data, error } = await supabase
         .from('styles')
         .select('*')
@@ -513,7 +524,7 @@ async function startServer() {
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
-    const rows = db.prepare("SELECT * FROM styles WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
+    const rows = db.prepare("SELECT * FROM styles WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
     res.json(rows);
   });
 
@@ -538,9 +549,9 @@ async function startServer() {
   // Palettes
   app.get("/api/palettes", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
-      if (supabase) {
+      if (supabase && userId) {
         const { data, error } = await supabase
           .from('palettes')
           .select('*')
@@ -554,7 +565,7 @@ async function startServer() {
         }));
         return res.json(mapped);
       }
-      const rows = db.prepare("SELECT * FROM palettes WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
+      const rows = db.prepare("SELECT * FROM palettes WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching palettes:", error);
@@ -599,9 +610,9 @@ async function startServer() {
   // References
   app.get("/api/references", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
-      if (supabase) {
+      if (supabase && userId) {
         const { data, error } = await supabase
           .from('references_images')
           .select('*')
@@ -611,7 +622,7 @@ async function startServer() {
         if (error) return res.status(500).json({ error: error.message });
         return res.json(data);
       }
-      const rows = db.prepare("SELECT * FROM references_images WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC").all(projectId, userId);
+      const rows = db.prepare("SELECT * FROM references_images WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching references:", error);
@@ -643,9 +654,9 @@ async function startServer() {
   // Showcase
   app.get("/api/showcase", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
-      if (supabase) {
+      if (supabase && userId) {
         const { data: showcase, error } = await supabase
           .from('showcase')
           .select(`
@@ -694,7 +705,7 @@ async function startServer() {
         LEFT JOIN generations g ON s.type = 'generation' AND s.item_id = g.id
         LEFT JOIN references_images r ON s.type = 'reference' AND s.item_id = r.id
         LEFT JOIN palettes p ON s.type = 'palette' AND s.item_id = p.id
-        WHERE s.project_id = ? AND s.user_id = ?
+        WHERE s.project_id = ? AND s.user_id IS ?
         ORDER BY s.created_at DESC
       `).all(projectId, userId);
       res.json(rows);
@@ -775,8 +786,8 @@ async function startServer() {
   // Project Settings
   app.get("/api/projects", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
-      if (supabase) {
+      const userId = req.session?.user?.id || null;
+      if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
           .select('*')
@@ -785,7 +796,7 @@ async function startServer() {
         if (error) throw error;
         return res.json(data);
       }
-      const rows = db.prepare("SELECT * FROM project_settings WHERE user_id = ? ORDER BY updated_at DESC").all(userId);
+      const rows = db.prepare("SELECT * FROM project_settings WHERE user_id IS ? ORDER BY updated_at DESC").all(userId);
       res.json(rows);
     } catch (error) {
       console.error("Error fetching projects:", error);
@@ -795,8 +806,8 @@ async function startServer() {
 
   app.get("/api/projects/:id", requireAuth, async (req, res) => {
     try {
-      const userId = req.session.user.id;
-      if (supabase) {
+      const userId = req.session?.user?.id || null;
+      if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
           .select('*')
@@ -806,7 +817,7 @@ async function startServer() {
         if (error) throw error;
         return res.json(data);
       }
-      const row = db.prepare("SELECT * FROM project_settings WHERE id = ? AND user_id = ?").get(req.params.id, userId);
+      const row = db.prepare("SELECT * FROM project_settings WHERE id = ? AND user_id IS ?").get(req.params.id, userId);
       res.json(row || null);
     } catch (error) {
       console.error("Error fetching project settings:", error);
@@ -871,8 +882,8 @@ async function startServer() {
 
   // Prompt Library
   app.get("/api/library", requireAuth, async (req, res) => {
-    const userId = req.session.user.id;
-    if (supabase) {
+    const userId = req.session?.user?.id || null;
+    if (supabase && userId) {
       const { data, error } = await supabase
         .from('prompt_library')
         .select('*')
@@ -882,7 +893,7 @@ async function startServer() {
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
-    const rows = db.prepare("SELECT * FROM prompt_library WHERE user_id = ? ORDER BY category ASC, title ASC").all(userId);
+    const rows = db.prepare("SELECT * FROM prompt_library WHERE user_id IS ? ORDER BY category ASC, title ASC").all(userId);
     res.json(rows);
   });
 
@@ -1044,20 +1055,6 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
-    });
-  }
-
   app.post("/api/sync", requireAuth, async (req, res) => {
     const userId = req.session.user.id;
     try {
@@ -1125,9 +1122,30 @@ async function startServer() {
     }
   });
 
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.error("Vite server creation failed:", e);
+    }
+  } else {
+    app.use(express.static(path.join(__dirname, "dist")));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    });
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+  } catch (err) {
+    console.error("Failed to start server:", err);
+  }
 }
 
 startServer();
