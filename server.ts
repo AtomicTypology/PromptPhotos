@@ -243,7 +243,7 @@ async function uploadToSupabase(base64Data: string, bucketName: string, fileName
 async function startServer() {
   try {
     const app = express();
-    const PORT = 3000;
+    const PORT = process.env.PORT ? parseInt(process.env.PORT) : 5000;
 
     app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
