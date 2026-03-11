@@ -1056,7 +1056,7 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "nano-banana-pro-preview",
         contents: `Convert this image idea into a structured JSON prompt: "${idea}".`,
         config: {
           systemInstruction,
@@ -1139,7 +1139,7 @@ async function startServer() {
       const ai = getAI();
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "nano-banana-pro-preview",
         contents: `Generate a moodboard for the vibe: "${vibe}".`,
         config: {
           responseMimeType: "application/json",
@@ -1175,7 +1175,7 @@ async function startServer() {
       const ai = getAI();
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "nano-banana-pro-preview",
         contents: [{
           parts: [
             { inlineData: { data: imageData.split(",")[1], mimeType: "image/png" } },
