@@ -30,6 +30,7 @@
     "lucide-react": "^0.546.0",
     "memoizee": "^0.4.17",
     "motion": "^12.35.1",
+    "openai": "^6.27.0",
     "openid-client": "^6.8.2",
     "passport": "^0.7.0",
     "react": "^19.0.0",
