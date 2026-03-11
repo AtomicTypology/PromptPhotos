@@ -1056,7 +1056,7 @@ async function startServer() {
       }
 
       const response = await ai.models.generateContent({
-        model: "nano-banana-pro-preview",
+        model: "gemini-2.5-flash",
         contents: `Convert this image idea into a structured JSON prompt: "${idea}".`,
         config: {
           systemInstruction,
@@ -1129,7 +1129,14 @@ async function startServer() {
       res.status(500).json({ error: "No image generated" });
     } catch (err: any) {
       console.error("generate-image error:", err);
-      res.status(500).json({ error: err.message || "Failed to generate image" });
+      const billingRequired = err.message?.includes("limit: 0") || err.message?.includes("free_tier");
+      const rateLimited = !billingRequired && err.status === 429;
+      const errorMsg = billingRequired
+        ? "Image generation requires billing to be enabled on your Google Cloud / Gemini API project. Visit https://ai.google.dev/gemini-api/docs/billing to enable it."
+        : rateLimited
+        ? "Rate limit reached. Please wait a moment and try again."
+        : err.message || "Failed to generate image";
+      res.status(500).json({ error: errorMsg, billing_required: billingRequired });
     }
   });
 
@@ -1139,7 +1146,7 @@ async function startServer() {
       const ai = getAI();
 
       const response = await ai.models.generateContent({
-        model: "nano-banana-pro-preview",
+        model: "gemini-2.5-flash",
         contents: `Generate a moodboard for the vibe: "${vibe}".`,
         config: {
           responseMimeType: "application/json",
@@ -1175,7 +1182,7 @@ async function startServer() {
       const ai = getAI();
 
       const response = await ai.models.generateContent({
-        model: "nano-banana-pro-preview",
+        model: "gemini-2.5-flash",
         contents: [{
           parts: [
             { inlineData: { data: imageData.split(",")[1], mimeType: "image/png" } },

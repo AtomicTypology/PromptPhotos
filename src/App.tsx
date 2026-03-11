@@ -496,8 +496,11 @@ export default function App() {
             selected_references: JSON.stringify(selectedReferences),
             created_at: new Date().toISOString()
           } as Generation;
-        } catch (err) {
+        } catch (err: any) {
           console.error(`Error generating image ${idx + 1}:`, err);
+          if (err.message?.includes('billing') || err.message?.includes('free_tier') || err.message?.includes('limit: 0')) {
+            setHasSelectedKey(false);
+          }
           return null;
         }
       });
@@ -509,13 +512,16 @@ export default function App() {
         setGeneratedImage(results[0].image_data);
         await loadData();
       } else {
-        alert('Failed to generate images. Please check your API key or try again.');
+        if (!hasSelectedKey) {
+          // billing banner already shown
+        } else {
+          alert('Image generation failed. Please try again or check the console for details.');
+        }
       }
     } catch (error: any) {
       console.error(error);
-      if (error.message?.includes('Requested entity was not found')) {
+      if (error.message?.includes('billing') || error.message?.includes('limit: 0') || error.message?.includes('free_tier')) {
         setHasSelectedKey(false);
-        alert('Your API key selection seems invalid. Please select a key from a paid Google Cloud project.');
       } else {
         alert('An unexpected error occurred during generation.');
       }
@@ -878,21 +884,21 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto h-screen no-scrollbar">
         {!hasSelectedKey && (
-          <div className="bg-studio-accent text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
+          <div className="bg-amber-600 text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
             <div className="flex items-center gap-3">
-              <AlertCircle className="w-5 h-5" />
+              <AlertCircle className="w-5 h-5 shrink-0" />
               <p className="text-sm font-medium">
-                High-quality image generation requires a Gemini API key. 
-                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-1 hover:text-white/80">
-                  Learn about billing
+                Image generation requires billing to be enabled on your Gemini API project (free tier has no image quota).
+                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-2 hover:text-white/80 font-bold">
+                  Enable billing →
                 </a>
               </p>
             </div>
-            <button 
-              onClick={handleSelectKey}
-              className="bg-white text-studio-accent px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-white/90 transition-colors"
+            <button
+              onClick={() => setHasSelectedKey(true)}
+              className="ml-4 bg-white/20 hover:bg-white/30 text-white px-3 py-1 rounded text-xs font-bold shrink-0 transition-colors"
             >
-              Select API Key
+              Dismiss
             </button>
           </div>
         )}
