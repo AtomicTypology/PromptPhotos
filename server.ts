@@ -18,8 +18,8 @@ const __dirname = path.dirname(__filename);
 const db = new Database("promptstudio.db");
 
 // Supabase Client (if configured)
-const supabaseUrl = process.env.SUPABASE_URL || "https://snwofoypavgrcpdpymlj.supabase.co";
-const supabaseKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNud29mb3lwYXZncmNwZHB5bWxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDg5NDgsImV4cCI6MjA4ODcyNDk0OH0.h2Swp87Sfuq_2sGLud4brsIhDwCj_I0TLkflVFJ5-JY";
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 let supabase: any = null;
