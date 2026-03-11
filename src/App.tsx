@@ -310,25 +310,21 @@ export default function App() {
   };
 
   const loadInitialData = async () => {
-    const [projs, stats] = await Promise.all([
+    const [projsR, statsR] = await Promise.allSettled([
       api.getProjects(),
       api.getProjectStats()
     ]);
+    const projs = projsR.status === 'fulfilled' ? projsR.value : [];
+    const stats = statsR.status === 'fulfilled' ? statsR.value : [];
     setProjects(projs);
     setProjectStats(stats);
-    
-    // Check for beach art specifically to answer user
-    const beachResults = await api.globalSearch('beach');
-    if (beachResults.generations.length > 0 || beachResults.library.length > 0) {
-      setBeachArtFound(beachResults);
-    }
-    
+
     const savedId = localStorage.getItem('promptstudio_current_project_id');
     if (savedId) {
       const id = Number(savedId);
       if (projs.some(p => p.id === id)) {
         setCurrentProjectId(id);
-        loadProjectData(id); // Force load even if ID didn't change
+        loadProjectData(id);
         return;
       }
     }
@@ -340,7 +336,7 @@ export default function App() {
   };
 
   const loadProjectData = async (projectId: number) => {
-    const [h, p, r, s, proj, lib, st] = await Promise.all([
+    const results = await Promise.allSettled([
       api.getGenerations(projectId),
       api.getPalettes(projectId),
       api.getReferences(projectId),
@@ -349,12 +345,31 @@ export default function App() {
       api.getLibrary(),
       api.getStyles(projectId)
     ]);
-    setHistory(h);
-    setPalettes(p);
-    setReferences(r);
-    setShowcase(s);
-    setProject(proj);
-    setLibrary(lib);
+    const [genR, palR, refR, showR, projR, libR] = results;
+
+    if (genR.status === 'fulfilled') setHistory(genR.value);
+
+    if (palR.status === 'fulfilled' && palR.value.length > 0) {
+      setPalettes(palR.value);
+      await set(`ps_palettes_${projectId}`, palR.value);
+    } else {
+      const cached = await get(`ps_palettes_${projectId}`);
+      if (cached && cached.length > 0) setPalettes(cached);
+      else if (palR.status === 'fulfilled') setPalettes([]);
+    }
+
+    if (refR.status === 'fulfilled' && refR.value.length > 0) {
+      setReferences(refR.value);
+      await set(`ps_references_${projectId}`, refR.value);
+    } else {
+      const cached = await get(`ps_references_${projectId}`);
+      if (cached && cached.length > 0) setReferences(cached);
+      else if (refR.status === 'fulfilled') setReferences([]);
+    }
+
+    if (showR.status === 'fulfilled') setShowcase(showR.value);
+    if (projR.status === 'fulfilled') setProject(projR.value);
+    if (libR.status === 'fulfilled') setLibrary(libR.value);
   };
 
   const loadData = async () => {
@@ -536,10 +551,30 @@ export default function App() {
     reader.onloadend = async () => {
       try {
         const base64 = reader.result as string;
+        const projectId = currentProjectId || 1;
+        const tempId = Date.now();
+        const timestamp = new Date().toISOString();
+
         if (type === 'reference') {
-          await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId });
+          const tempRef = { id: tempId, project_id: projectId, name: file.name, image_data: base64, created_at: timestamp };
+          const newRefs = [...references, tempRef];
+          setReferences(newRefs);
+          await set(`ps_references_${projectId}`, newRefs);
+          try {
+            await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId });
+          } catch (serverErr) {
+            console.warn('Server save failed, reference cached locally:', serverErr);
+          }
         } else {
-          await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId });
+          const tempPal = { id: tempId, project_id: projectId, name: file.name, image_data: base64, created_at: timestamp };
+          const newPals = [...palettes, tempPal];
+          setPalettes(newPals);
+          await set(`ps_palettes_${projectId}`, newPals);
+          try {
+            await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId });
+          } catch (serverErr) {
+            console.warn('Server save failed, palette cached locally:', serverErr);
+          }
         }
         await loadData();
       } catch (error) {
