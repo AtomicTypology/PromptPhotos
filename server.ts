@@ -245,6 +245,7 @@ async function startServer() {
     const app = express();
     const PORT = 3000;
 
+    app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
     app.use(cookieSession({
       name: 'session',
@@ -255,6 +256,23 @@ async function startServer() {
     }));
 
   // Auth Routes
+  app.get("/api/auth/debug", (req, res) => {
+    const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+    res.json({
+      envAppUrl: process.env.APP_URL || "NOT SET",
+      reqProtocol: req.protocol,
+      reqHost: req.get('host'),
+      xForwardedProto: req.get('x-forwarded-proto'),
+      baseUrl,
+      normalizedBaseUrl,
+      redirectUri: `${normalizedBaseUrl}/auth/callback`,
+      googleClientId: googleClientId ? `${googleClientId.substring(0, 10)}...${googleClientId.substring(googleClientId.length - 10)}` : "MISSING",
+      googleClientSecret: googleClientSecret ? "SET" : "MISSING",
+      sessionSecret: sessionSecret === "prompt-studio-secret" ? "DEFAULT" : "CUSTOM"
+    });
+  });
+
   app.get("/api/auth/url", (req, res) => {
     if (!oauth2Client) {
       return res.status(500).json({ error: "Google OAuth not configured" });
