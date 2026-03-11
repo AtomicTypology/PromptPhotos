@@ -458,8 +458,8 @@ export default function App() {
         .filter(r => selectedReferences.includes(r.id))
         .map(r => r.image_data);
 
-      // Generate 4 images in parallel
-      const generationPromises = Array(4).fill(null).map(async (_, idx) => {
+      // Generate 2 images to avoid rate-limiting
+      const generationPromises = Array(2).fill(null).map(async (_, idx) => {
         try {
           const image = await generateImage(promptToUse, refImages);
           const res = await api.saveGeneration({
