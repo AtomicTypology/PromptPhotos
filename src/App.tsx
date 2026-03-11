@@ -248,18 +248,6 @@ export default function App() {
       if (backup && date) {
         setHasBrowserBackup(true);
         setLastBackupDate(date);
-        
-        // If the current database is essentially empty (only 1 project with default name), 
-        // offer to restore the backup automatically.
-        const stats = await api.getProjectStats();
-        const totalGenerations = stats.reduce((acc, s) => acc + (s.generation_count || 0), 0);
-        
-        if (totalGenerations === 0 && stats.length <= 1) {
-          if (confirm(`Welcome back! We found a local backup from ${new Date(date).toLocaleString()}. Would you like to restore your workspace?`)) {
-            await api.importWorkspace(backup);
-            window.location.reload();
-          }
-        }
       }
     } catch (error) {
       console.error("Failed to check browser backup:", error);
