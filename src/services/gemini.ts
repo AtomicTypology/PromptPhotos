@@ -35,7 +35,10 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `Request failed: ${res.status}`);
+    const error = new Error(err.error || `Request failed: ${res.status}`) as any;
+    error.quota_exhausted = err.quota_exhausted;
+    error.needs_upgrade = err.needs_upgrade;
+    throw error;
   }
   return res.json();
 }

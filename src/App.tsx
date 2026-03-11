@@ -486,7 +486,7 @@ export default function App() {
           } as Generation;
         } catch (err: any) {
           console.error(`Error generating image ${idx + 1}:`, err);
-          if (err.message?.includes('billing') || err.message?.includes('free_tier') || err.message?.includes('limit: 0')) {
+          if (err.quota_exhausted || err.needs_upgrade || err.message?.includes('quota') || err.message?.includes('upgrade')) {
             setHasSelectedKey(false);
           }
           return null;
@@ -501,14 +501,14 @@ export default function App() {
         await loadData();
       } else {
         if (!hasSelectedKey) {
-          // billing banner already shown
+          // quota banner already shown
         } else {
           alert('Image generation failed. Please try again or check the console for details.');
         }
       }
     } catch (error: any) {
       console.error(error);
-      if (error.message?.includes('billing') || error.message?.includes('limit: 0') || error.message?.includes('free_tier')) {
+      if (error.quota_exhausted || error.needs_upgrade || error.message?.includes('quota') || error.message?.includes('upgrade')) {
         setHasSelectedKey(false);
       } else {
         alert('An unexpected error occurred during generation.');
@@ -876,9 +876,9 @@ export default function App() {
             <div className="flex items-center gap-3">
               <AlertCircle className="w-5 h-5 shrink-0" />
               <p className="text-sm font-medium">
-                Image generation requires billing to be enabled on your Gemini API project (free tier has no image quota).
-                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-2 hover:text-white/80 font-bold">
-                  Enable billing →
+                Daily image generation quota reached (resets at midnight Pacific), or your project needs upgrading for unlimited access.
+                <a href="https://ai.dev/projects" target="_blank" rel="noopener noreferrer" className="underline ml-2 hover:text-white/80 font-bold">
+                  Upgrade project at ai.dev →
                 </a>
               </p>
             </div>

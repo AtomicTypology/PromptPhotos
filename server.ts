@@ -1111,32 +1111,31 @@ async function startServer() {
 
       const response = await ai.models.generateContent({
         model: "gemini-3.1-flash-image-preview",
-        contents: { parts },
+        contents: [{ parts }],
         config: {
-          imageConfig: {
-            aspectRatio: structuredPrompt.aspect_ratio || "1:1",
-            imageSize: "1K"
-          }
+          responseModalities: ["IMAGE", "TEXT"]
         }
       });
 
       for (const part of response.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData) {
-          return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+          const mimeType = part.inlineData.mimeType || "image/png";
+          return res.json({ image: `data:${mimeType};base64,${part.inlineData.data}` });
         }
       }
 
       res.status(500).json({ error: "No image generated" });
     } catch (err: any) {
       console.error("generate-image error:", err);
-      const billingRequired = err.message?.includes("limit: 0") || err.message?.includes("free_tier");
-      const rateLimited = !billingRequired && err.status === 429;
-      const errorMsg = billingRequired
-        ? "Image generation requires billing to be enabled on your Google Cloud / Gemini API project. Visit https://ai.google.dev/gemini-api/docs/billing to enable it."
-        : rateLimited
-        ? "Rate limit reached. Please wait a moment and try again."
-        : err.message || "Failed to generate image";
-      res.status(500).json({ error: errorMsg, billing_required: billingRequired });
+      const msg = err.message || "";
+      const quotaExhausted = err.status === 429;
+      const needsUpgrade = msg.includes("paid plans") || msg.includes("upgrade your account");
+      const errorMsg = needsUpgrade
+        ? "Image generation requires upgrading your project at https://ai.dev/projects."
+        : quotaExhausted
+        ? "Daily image generation quota reached. Quota resets at midnight Pacific Time. To generate unlimited images, upgrade your project at https://ai.dev/projects."
+        : msg || "Failed to generate image";
+      res.status(500).json({ error: errorMsg, quota_exhausted: quotaExhausted, needs_upgrade: needsUpgrade });
     }
   });
 
