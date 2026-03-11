@@ -4,14 +4,14 @@ import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
-import { OAuth2Client } from "google-auth-library";
 import { Storage } from "@google-cloud/storage";
-import cookieSession from "cookie-session";
+import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth/index.js";
 
 declare global {
   namespace Express {
     interface Request {
       session: any;
+      user?: any;
     }
   }
 }
@@ -51,21 +51,11 @@ if (supabase) {
 }
 
 // Google Cloud Configuration
-const googleClientId = process.env.GOOGLE_CLIENT_ID;
-const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const gcsBucketName = process.env.GCS_BUCKET_NAME;
-const sessionSecret = process.env.SESSION_SECRET || "prompt-studio-secret";
-
-const oauth2Client = (googleClientId && googleClientSecret) 
-  ? new OAuth2Client(googleClientId, googleClientSecret) 
-  : null;
 
 const storage = gcsBucketName ? new Storage() : null;
 const bucket = storage ? storage.bucket(gcsBucketName) : null;
 
-if (oauth2Client) {
-  console.log("Google OAuth configured.");
-}
 if (bucket) {
   console.log(`Google Cloud Storage configured: ${gcsBucketName}`);
 }
