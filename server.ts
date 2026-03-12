@@ -1131,7 +1131,7 @@ async function startServer() {
 
   async function generateWithGemini(parts: any[], ai: any): Promise<string> {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-image",
+      model: "gemini-2.0-flash-preview-image-generation",
       contents: [{ parts }],
       config: {
         responseModalities: ["IMAGE", "TEXT"],
