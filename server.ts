@@ -4,14 +4,17 @@ import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
+import { OAuth2Client } from "google-auth-library";
 import { Storage } from "@google-cloud/storage";
-import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth/index.js";
-import { GoogleGenAI, Type } from "@google/genai";
+import cookieSession from "cookie-session";
 
-function getUserId(req: express.Request): string | null {
-  return (req.user as any)?.claims?.sub || null;
+declare global {
+  namespace Express {
+    interface Request {
+      session: any;
+    }
+  }
 }
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,8 +22,8 @@ const __dirname = path.dirname(__filename);
 const db = new Database("promptstudio.db");
 
 // Supabase Client (if configured)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || "https://snwofoypavgrcpdpymlj.supabase.co";
+const supabaseKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNud29mb3lwYXZncmNwZHB5bWxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDg5NDgsImV4cCI6MjA4ODcyNDk0OH0.h2Swp87Sfuq_2sGLud4brsIhDwCj_I0TLkflVFJ5-JY";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 let supabase: any = null;
@@ -48,11 +51,21 @@ if (supabase) {
 }
 
 // Google Cloud Configuration
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const gcsBucketName = process.env.GCS_BUCKET_NAME;
+const sessionSecret = process.env.SESSION_SECRET || "prompt-studio-secret";
+
+const oauth2Client = (googleClientId && googleClientSecret) 
+  ? new OAuth2Client(googleClientId, googleClientSecret) 
+  : null;
 
 const storage = gcsBucketName ? new Storage() : null;
 const bucket = storage ? storage.bucket(gcsBucketName) : null;
 
+if (oauth2Client) {
+  console.log("Google OAuth configured.");
+}
 if (bucket) {
   console.log(`Google Cloud Storage configured: ${gcsBucketName}`);
 }
@@ -202,8 +215,11 @@ async function loadFromGCS(userId: string) {
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
   
-  if (!getUserId(req) && !isGuestAllowed) {
-    return res.status(401).json({ error: "Unauthorized" });
+  if (!req.session?.user && !isGuestAllowed) {
+    return res.status(401).json({ 
+      error: "Unauthorized", 
+      details: "You must be signed in to perform this action. Please sign in with Google." 
+    });
   }
   next();
 };
@@ -230,48 +246,152 @@ async function uploadToSupabase(base64Data: string, bucketName: string, fileName
 async function startServer() {
   try {
     const app = express();
-    const PORT = process.env.PORT ? parseInt(process.env.PORT) : 5000;
+    const PORT = 3000;
 
+    app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
+    app.use(cookieSession({
+      name: 'session',
+      keys: [sessionSecret],
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      secure: true,
+      sameSite: 'none'
+    }));
 
-    await setupAuth(app);
-    registerAuthRoutes(app);
+  // Auth Routes
+  app.get("/api/auth/debug", (req, res) => {
+    const protocol = req.get('x-forwarded-proto') || req.protocol;
+    const host = req.get('host');
+    const detectedUrl = `${protocol}://${host}`;
+    const baseUrl = process.env.APP_URL || detectedUrl;
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+    const redirectUri = `${normalizedBaseUrl}/auth/callback`;
+    
+    res.json({
+      envAppUrl: process.env.APP_URL || "NOT SET",
+      reqProtocol: req.protocol,
+      reqHost: req.get('host'),
+      xForwardedProto: req.get('x-forwarded-proto'),
+      detectedUrl,
+      baseUrl,
+      normalizedBaseUrl,
+      redirectUri,
+      googleClientId: googleClientId || "MISSING",
+      googleClientSecret: googleClientSecret ? "SET" : "MISSING",
+      sessionSecret: sessionSecret === "prompt-studio-secret" ? "DEFAULT" : "CUSTOM"
+    });
+  });
 
-    app.use(async (req: any, _res, next) => {
-      if (req.isAuthenticated && req.isAuthenticated() && req.user?.claims && supabase) {
-        const claims = req.user.claims;
-        const userId = claims.sub;
-        if (userId && !req._supabaseUpsertDone) {
-          req._supabaseUpsertDone = true;
-          try {
-            await supabase.from('users').upsert({
-              id: userId,
-              email: claims.email,
-              name: [claims.first_name, claims.last_name].filter(Boolean).join(" ") || claims.email,
-              picture: claims.profile_image_url
-            });
+  app.get("/api/auth/url", (req, res) => {
+    if (!oauth2Client) {
+      return res.status(500).json({ error: "Google OAuth not configured" });
+    }
+    
+    // Use the current request's host and protocol to ensure the redirect URI matches the environment
+    const protocol = req.get('x-forwarded-proto') || req.protocol;
+    const host = req.get('host');
+    const redirectUri = `${protocol}://${host}/auth/callback`;
+    
+    console.log("DEBUG: Generating Auth URL");
+    console.log("DEBUG: redirectUri:", redirectUri);
+    
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
+      redirect_uri: redirectUri
+    });
+    res.json({ url });
+  });
 
-            const { data: projects } = await supabase
-              .from('project_settings')
-              .select('id')
-              .eq('user_id', userId)
-              .limit(1);
+  app.get("/auth/callback", async (req, res) => {
+    const { code } = req.query;
+    if (!oauth2Client || !code) {
+      return res.status(400).send("Invalid request");
+    }
 
-            if (!projects || projects.length === 0) {
-              await supabase.from('project_settings').insert({
-                user_id: userId,
-                name: 'Main Workspace',
-                brief: 'Your primary creative environment.',
-                global_style: 'Modern, Clean, Minimalist'
-              });
-            }
-          } catch (err) {
-            console.error("Supabase user upsert failed:", err);
-          }
+    try {
+      // Use dynamic redirect URI to match the environment
+      const protocol = req.get('x-forwarded-proto') || req.protocol;
+      const host = req.get('host');
+      const redirectUri = `${protocol}://${host}/auth/callback`;
+      
+      const { tokens } = await oauth2Client.getToken({
+        code: code as string,
+        redirect_uri: redirectUri
+      });
+      oauth2Client.setCredentials(tokens);
+
+      const ticket = await oauth2Client.verifyIdToken({
+        idToken: tokens.id_token!,
+        audience: googleClientId,
+      });
+      const payload = ticket.getPayload();
+
+      if (req.session) {
+        req.session.user = {
+          id: payload?.sub,
+          email: payload?.email,
+          name: payload?.name,
+          picture: payload?.picture
+        };
+      }
+
+      // Multi-user initialization
+      if (supabase && payload?.sub) {
+        // 1. Upsert user
+        await supabase.from('users').upsert({
+          id: payload.sub,
+          email: payload.email,
+          name: payload.name,
+          picture: payload.picture
+        });
+
+        // 2. Ensure default project exists for this user
+        const { data: projects } = await supabase
+          .from('project_settings')
+          .select('id')
+          .eq('user_id', payload.sub)
+          .limit(1);
+
+        if (!projects || projects.length === 0) {
+          await supabase.from('project_settings').insert({
+            user_id: payload.sub,
+            name: 'Main Workspace',
+            brief: 'Your primary creative environment.',
+            global_style: 'Modern, Clean, Minimalist'
+          });
         }
       }
-      next();
-    });
+
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                window.close();
+              } else {
+                window.location.href = '/';
+              }
+            </script>
+            <p>Authentication successful. This window should close automatically.</p>
+          </body>
+        </html>
+      `);
+    } catch (error) {
+      console.error("OAuth callback error:", error);
+      res.status(500).send("Authentication failed");
+    }
+  });
+
+  app.get("/api/me", (req, res) => {
+    res.json(req.session?.user || null);
+  });
+
+  app.post("/api/logout", (req, res) => {
+    req.session = null;
+    res.json({ success: true });
+  });
 
   // Ensure all data is linked to a valid project
   db.exec(`
@@ -285,7 +405,7 @@ async function startServer() {
 
   // Global Search
   app.get("/api/search", requireAuth, (req, res) => {
-    const userId = getUserId(req);
+    const userId = req.session?.user?.id || null;
     const query = `%${req.query.q || ''}%`;
     const results = {
       generations: db.prepare(`
@@ -307,7 +427,7 @@ async function startServer() {
 
   // Project Stats
   app.get("/api/projects/stats", requireAuth, async (req, res) => {
-    const userId = getUserId(req);
+    const userId = req.session?.user?.id || null;
     if (supabase && userId) {
       const { data: stats, error } = await supabase
         .from('project_settings')
@@ -349,7 +469,7 @@ async function startServer() {
   // API Routes
 
   app.get("/api/generations", requireAuth, async (req, res) => {
-    const userId = getUserId(req);
+    const userId = req.session?.user?.id || null;
     const projectId = parseInt(req.query.projectId as string) || 1;
     
     if (supabase && userId) {
@@ -375,7 +495,7 @@ async function startServer() {
 
   app.post("/api/generations", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req)!;
+      const userId = req.session.user.id;
       const { idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references } = req.body;
       
       if (!image_data) {
@@ -423,7 +543,7 @@ async function startServer() {
   });
 
   app.get("/api/styles", requireAuth, async (req, res) => {
-    const userId = getUserId(req);
+    const userId = req.session?.user?.id || null;
     const projectId = parseInt(req.query.projectId as string) || 1;
     if (supabase && userId) {
       const { data, error } = await supabase
@@ -440,7 +560,7 @@ async function startServer() {
   });
 
   app.post("/api/styles", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     const { name, style_json, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -460,7 +580,7 @@ async function startServer() {
   // Palettes
   app.get("/api/palettes", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req);
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data, error } = await supabase
@@ -486,7 +606,7 @@ async function startServer() {
 
   app.post("/api/palettes", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req)!;
+      const userId = req.session.user.id;
       const { name, image_data, project_id } = req.body;
       
       let imageUrl = null;
@@ -521,7 +641,7 @@ async function startServer() {
   // References
   app.get("/api/references", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req);
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data, error } = await supabase
@@ -543,7 +663,7 @@ async function startServer() {
 
   app.post("/api/references", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req)!;
+      const userId = req.session.user.id;
       const { name, image_data, project_id } = req.body;
       if (supabase) {
         const { data, error } = await supabase
@@ -565,7 +685,7 @@ async function startServer() {
   // Showcase
   app.get("/api/showcase", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req);
+      const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
       if (supabase && userId) {
         const { data: showcase, error } = await supabase
@@ -627,7 +747,7 @@ async function startServer() {
   });
 
   app.post("/api/showcase", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     const { type, item_id, project_id } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -643,7 +763,7 @@ async function startServer() {
   });
 
   app.post("/api/showcase/:id/star", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     if (supabase) {
       // Get current state
       const { data: current } = await supabase.from('showcase').select('starred').eq('id', req.params.id).eq('user_id', userId).single();
@@ -697,7 +817,7 @@ async function startServer() {
   // Project Settings
   app.get("/api/projects", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req);
+      const userId = req.session?.user?.id || null;
       if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
@@ -717,7 +837,7 @@ async function startServer() {
 
   app.get("/api/projects/:id", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req);
+      const userId = req.session?.user?.id || null;
       if (supabase && userId) {
         const { data, error } = await supabase
           .from('project_settings')
@@ -738,7 +858,7 @@ async function startServer() {
 
   app.post("/api/projects", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req)!;
+      const userId = req.session.user.id;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { data, error } = await supabase
@@ -760,7 +880,7 @@ async function startServer() {
 
   app.post("/api/projects/:id", requireAuth, async (req, res) => {
     try {
-      const userId = getUserId(req)!;
+      const userId = req.session.user.id;
       const { name, brief, global_style } = req.body;
       if (supabase) {
         const { error } = await supabase
@@ -781,7 +901,7 @@ async function startServer() {
   });
 
   app.delete("/api/generations/:id", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     if (supabase) {
       const { error } = await supabase.from('generations').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
@@ -793,7 +913,7 @@ async function startServer() {
 
   // Prompt Library
   app.get("/api/library", requireAuth, async (req, res) => {
-    const userId = getUserId(req);
+    const userId = req.session?.user?.id || null;
     if (supabase && userId) {
       const { data, error } = await supabase
         .from('prompt_library')
@@ -809,7 +929,7 @@ async function startServer() {
   });
 
   app.post("/api/library", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     const { category, title, prompt } = req.body;
     if (supabase) {
       const { data, error } = await supabase
@@ -826,7 +946,7 @@ async function startServer() {
   });
 
   app.post("/api/library/import", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     const { items } = req.body;
     
     if (supabase) {
@@ -854,7 +974,7 @@ async function startServer() {
   });
 
   app.delete("/api/library/:id", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     if (supabase) {
       const { error } = await supabase.from('prompt_library').delete().eq('id', req.params.id).eq('user_id', userId);
       if (error) return res.status(500).json({ error: error.message });
@@ -866,7 +986,7 @@ async function startServer() {
 
   // Privacy: Purge Server Database
   app.post("/api/purge", requireAuth, (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     try {
       db.prepare("DELETE FROM showcase WHERE user_id = ?").run(userId);
       db.prepare("DELETE FROM references_images WHERE user_id = ?").run(userId);
@@ -885,7 +1005,7 @@ async function startServer() {
 
   // Export/Import
   app.get("/api/export", requireAuth, (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     try {
       const data = {
         projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
@@ -903,7 +1023,7 @@ async function startServer() {
   });
 
   app.post("/api/import", requireAuth, (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     try {
       const data = req.body;
       const transaction = db.transaction((data) => {
@@ -967,7 +1087,7 @@ async function startServer() {
   });
 
   app.post("/api/sync", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     try {
       const data = {
         projects: db.prepare("SELECT * FROM project_settings WHERE user_id = ?").all(userId),
@@ -987,7 +1107,7 @@ async function startServer() {
   });
 
   app.post("/api/restore", requireAuth, async (req, res) => {
-    const userId = getUserId(req)!;
+    const userId = req.session.user.id;
     try {
       const data = await loadFromGCS(userId);
       if (!data) {
@@ -1032,250 +1152,6 @@ async function startServer() {
       res.status(500).json({ error: "Restore failed" });
     }
   });
-
-  // ─── Gemini AI Routes ───────────────────────────────────────────────────────
-
-  const getAI = () => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-    return new GoogleGenAI({ apiKey });
-  };
-
-  app.post("/api/ai/generate-prompt", async (req, res) => {
-    try {
-      const { idea, projectContext, parentPrompt, feedback } = req.body;
-      const ai = getAI();
-
-      let systemInstruction = projectContext
-        ? `You are a creative engineer for a project with the following brief: "${projectContext.brief}". The global visual style is: "${projectContext.global_style}". All prompts must adhere to this project identity.`
-        : "You are a creative engineer converting ideas into structured image prompts.";
-
-      if (parentPrompt) {
-        systemInstruction += `\nThis is a refinement of: ${JSON.stringify(parentPrompt)}.`;
-        if (feedback) systemInstruction += `\nApply this feedback: "${feedback}".`;
-      }
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Convert this image idea into a structured JSON prompt: "${idea}".`,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              prompt: { type: Type.STRING },
-              style: { type: Type.STRING },
-              lighting: { type: Type.STRING },
-              camera: { type: Type.OBJECT, properties: { lens: { type: Type.STRING }, depth_of_field: { type: Type.STRING } } },
-              composition: { type: Type.OBJECT, properties: { framing: { type: Type.STRING }, angle: { type: Type.STRING } } },
-              color_grading: { type: Type.STRING },
-              aspect_ratio: { type: Type.STRING, enum: ["1:1", "3:4", "4:3", "9:16", "16:9"] },
-              negative_prompt: { type: Type.STRING }
-            },
-            required: ["prompt", "style", "lighting"]
-          }
-        }
-      });
-
-      res.json(JSON.parse(response.text || "{}"));
-    } catch (err: any) {
-      console.error("generate-prompt error:", err);
-      res.status(500).json({ error: err.message || "Failed to generate prompt" });
-    }
-  });
-
-  const FAL_ASPECT_MAP: Record<string, string> = {
-    "1:1": "square_hd",
-    "3:4": "portrait_4_3",
-    "4:3": "landscape_4_3",
-    "9:16": "portrait_16_9",
-    "16:9": "landscape_16_9",
-  };
-
-  async function generateWithFal(prompt: string, aspectRatio: string): Promise<string> {
-    const falKey = process.env.FAL_KEY;
-    if (!falKey) throw new Error("FAL_KEY not set");
-
-    const falRes = await fetch("https://fal.run/fal-ai/flux/dev", {
-      method: "POST",
-      headers: {
-        "Authorization": `Key ${falKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt,
-        image_size: FAL_ASPECT_MAP[aspectRatio] || "square_hd",
-        num_inference_steps: 28,
-        guidance_scale: 3.5,
-        num_images: 1,
-        output_format: "jpeg",
-      }),
-    });
-
-    if (!falRes.ok) {
-      const errBody = await falRes.json().catch(() => ({}));
-      throw new Error(errBody.detail || errBody.message || `fal.ai error ${falRes.status}`);
-    }
-
-    const data = await falRes.json() as { images: { url: string; content_type?: string }[] };
-    const imgUrl = data.images?.[0]?.url;
-    if (!imgUrl) throw new Error("fal.ai returned no image");
-
-    const imgFetch = await fetch(imgUrl);
-    if (!imgFetch.ok) throw new Error("Failed to download generated image");
-    const buffer = Buffer.from(await imgFetch.arrayBuffer());
-    const contentType = data.images[0].content_type || "image/jpeg";
-    return `data:${contentType};base64,${buffer.toString("base64")}`;
-  }
-
-  async function generateWithGemini(parts: any[], ai: any): Promise<string> {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents: [{ parts }],
-      config: {
-        responseModalities: ["IMAGE", "TEXT"],
-      },
-    });
-
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        const mimeType = part.inlineData.mimeType || "image/png";
-        return `data:${mimeType};base64,${part.inlineData.data}`;
-      }
-    }
-    throw new Error("No image generated by Gemini");
-  }
-
-  app.post("/api/ai/generate-image", async (req, res) => {
-    try {
-      const { structuredPrompt, referenceImages } = req.body;
-
-      const fullPrompt = [
-        `Subject: ${structuredPrompt.prompt}`,
-        `Style: ${structuredPrompt.style}`,
-        `Lighting: ${structuredPrompt.lighting}`,
-        structuredPrompt.camera?.lens ? `Camera: ${structuredPrompt.camera.lens}, ${structuredPrompt.camera.depth_of_field}` : "",
-        structuredPrompt.composition?.framing ? `Composition: ${structuredPrompt.composition.framing}, ${structuredPrompt.composition.angle}` : "",
-        structuredPrompt.color_grading ? `Color Grading: ${structuredPrompt.color_grading}` : "",
-        structuredPrompt.negative_prompt ? `Negative Prompt: ${structuredPrompt.negative_prompt}` : ""
-      ].filter(Boolean).join("\n");
-
-      let imageDataUri: string;
-
-      if (process.env.FAL_KEY) {
-        imageDataUri = await generateWithFal(fullPrompt, structuredPrompt.aspect_ratio || "1:1");
-      } else {
-        const ai = getAI();
-        const parts: any[] = [{ text: fullPrompt }];
-        if (referenceImages?.length) {
-          referenceImages.forEach((img: string) => {
-            parts.push({ inlineData: { data: img.split(",")[1], mimeType: "image/png" } });
-          });
-          parts.push({ text: "Use the provided images as visual references for style, composition, and mood." });
-        }
-        imageDataUri = await generateWithGemini(parts, ai);
-      }
-
-      return res.json({ image: imageDataUri });
-    } catch (err: any) {
-      console.error("generate-image error:", err);
-      const msg = err.message || "";
-      const quotaExhausted = err.status === 429;
-      const needsUpgrade = msg.includes("paid plans") || msg.includes("upgrade your account");
-      const errorMsg = needsUpgrade
-        ? "Image generation requires upgrading your project at https://ai.dev/projects."
-        : quotaExhausted
-        ? "Daily image generation quota reached. Quota resets at midnight Pacific Time. To generate unlimited images, upgrade your project at https://ai.dev/projects."
-        : msg || "Failed to generate image";
-      res.status(500).json({ error: errorMsg, quota_exhausted: quotaExhausted, needs_upgrade: needsUpgrade });
-    }
-  });
-
-  app.post("/api/ai/generate-moodboard", async (req, res) => {
-    try {
-      const { vibe } = req.body;
-      const ai = getAI();
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Generate a moodboard for the vibe: "${vibe}".`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              palette: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  colors: { type: Type.ARRAY, items: { type: Type.STRING } }
-                },
-                required: ["name", "colors"]
-              },
-              visual_language: { type: Type.STRING },
-              reference_prompts: { type: Type.ARRAY, items: { type: Type.STRING } }
-            },
-            required: ["palette", "visual_language", "reference_prompts"]
-          }
-        }
-      });
-
-      res.json(JSON.parse(response.text || "{}"));
-    } catch (err: any) {
-      console.error("generate-moodboard error:", err);
-      res.status(500).json({ error: err.message || "Failed to generate moodboard" });
-    }
-  });
-
-  app.post("/api/ai/critique", async (req, res) => {
-    try {
-      const { imageData, originalPrompt } = req.body;
-      const ai = getAI();
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{
-          parts: [
-            { inlineData: { data: imageData.split(",")[1], mimeType: "image/png" } },
-            { text: `Analyze this generated image against its prompt: ${JSON.stringify(originalPrompt)}. Provide a critique and a refined prompt to improve it.` }
-          ]
-        }],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              analysis: { type: Type.STRING },
-              suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-              refined_prompt: {
-                type: Type.OBJECT,
-                properties: {
-                  prompt: { type: Type.STRING },
-                  style: { type: Type.STRING },
-                  lighting: { type: Type.STRING },
-                  camera: { type: Type.OBJECT, properties: { lens: { type: Type.STRING }, depth_of_field: { type: Type.STRING } } },
-                  composition: { type: Type.OBJECT, properties: { framing: { type: Type.STRING }, angle: { type: Type.STRING } } },
-                  color_grading: { type: Type.STRING },
-                  aspect_ratio: { type: Type.STRING, enum: ["1:1", "3:4", "4:3", "9:16", "16:9"] },
-                  negative_prompt: { type: Type.STRING }
-                },
-                required: ["prompt", "style", "lighting"]
-              }
-            },
-            required: ["analysis", "suggestions", "refined_prompt"]
-          }
-        }
-      });
-
-      res.json(JSON.parse(response.text || "{}"));
-    } catch (err: any) {
-      console.error("critique error:", err);
-      res.status(500).json({ error: err.message || "Failed to critique image" });
-    }
-  });
-
-  // ─── End Gemini AI Routes ────────────────────────────────────────────────────
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

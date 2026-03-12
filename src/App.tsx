@@ -75,6 +75,67 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [isRescuing, setIsRescuing] = useState(false);
   const [rescueResult, setRescueResult] = useState<any>(null);
+  const [browserBackupCount, setBrowserBackupCount] = useState(0);
+  const [showBackupSuggestion, setShowBackupSuggestion] = useState(false);
+
+  // Browser Backup Logic
+  const backupGenerationLocally = async (gen: Generation) => {
+    try {
+      const existing: Generation[] = await get('browser_generations') || [];
+      // Keep last 100 generations in browser to avoid filling up storage
+      const updated = [gen, ...existing].slice(0, 100);
+      await set('browser_generations', updated);
+      setBrowserBackupCount(updated.length);
+    } catch (err) {
+      console.error('Failed to save browser backup:', err);
+    }
+  };
+
+  const restoreFromBrowser = async () => {
+    setIsRescuing(true);
+    try {
+      const backup: Generation[] = await get('browser_generations') || [];
+      if (backup.length === 0) {
+        alert('No browser backup found.');
+        return;
+      }
+
+      let restoredCount = 0;
+      for (const gen of backup) {
+        try {
+          await api.saveGeneration({
+            idea: gen.idea,
+            prompt_json: gen.prompt_json,
+            image_data: gen.image_data,
+            parent_id: null, // Reset lineage to avoid foreign key issues
+            project_id: currentProjectId,
+            feedback: gen.feedback,
+            batch_id: gen.batch_id,
+            selected_references: gen.selected_references
+          });
+          restoredCount++;
+        } catch (e) {
+          console.error('Failed to restore individual generation:', e);
+        }
+      }
+      
+      alert(`Successfully restored ${restoredCount} images from your browser's local storage.`);
+      await loadData();
+    } catch (err) {
+      console.error('Restore failed:', err);
+      alert('Failed to restore from browser.');
+    } finally {
+      setIsRescuing(false);
+    }
+  };
+
+  useEffect(() => {
+    const checkBackup = async () => {
+      const backup: Generation[] = await get('browser_generations') || [];
+      setBrowserBackupCount(backup.length);
+    };
+    checkBackup();
+  }, []);
   const [showDebug, setShowDebug] = useState(false);
   const [beachArtFound, setBeachArtFound] = useState<any>(null);
   const [currentProjectId, setCurrentProjectId] = useState<number>(() => {
@@ -147,12 +208,41 @@ export default function App() {
     fetchUser();
   }, []);
 
-  const handleLogin = () => {
-    window.location.href = '/api/login';
+  const handleLogin = async () => {
+    setIsLoggingIn(true);
+    try {
+      const { url } = await api.getAuthUrl();
+      const authWindow = window.open(url, 'google_oauth', 'width=600,height=700');
+      
+      if (!authWindow) {
+        alert('Please allow popups to sign in with Google');
+        return;
+      }
+
+      const handleMessage = async (event: MessageEvent) => {
+        if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+          const userData = await api.getMe();
+          setUser(userData);
+          window.removeEventListener('message', handleMessage);
+          loadInitialData();
+        }
+      };
+      window.addEventListener('message', handleMessage);
+    } catch (error) {
+      console.error("Login failed:", error);
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
-  const handleLogout = () => {
-    window.location.href = '/api/logout';
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+      setUser(null);
+      loadInitialData();
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
   };
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -248,6 +338,18 @@ export default function App() {
       if (backup && date) {
         setHasBrowserBackup(true);
         setLastBackupDate(date);
+        
+        // If the current database is essentially empty (only 1 project with default name), 
+        // offer to restore the backup automatically.
+        const stats = await api.getProjectStats();
+        const totalGenerations = stats.reduce((acc, s) => acc + (s.generation_count || 0), 0);
+        
+        if (totalGenerations === 0 && stats.length <= 1) {
+          if (confirm(`Welcome back! We found a local backup from ${new Date(date).toLocaleString()}. Would you like to restore your workspace?`)) {
+            await api.importWorkspace(backup);
+            window.location.reload();
+          }
+        }
       }
     } catch (error) {
       console.error("Failed to check browser backup:", error);
@@ -298,33 +400,45 @@ export default function App() {
   };
 
   const loadInitialData = async () => {
-    const [projsR, statsR] = await Promise.allSettled([
+    const [projs, stats] = await Promise.all([
       api.getProjects(),
       api.getProjectStats()
     ]);
-    const projs = projsR.status === 'fulfilled' ? projsR.value : [];
-    const stats = statsR.status === 'fulfilled' ? statsR.value : [];
     setProjects(projs);
     setProjectStats(stats);
-
+    
+    // Check for beach art specifically to answer user
+    const beachResults = await api.globalSearch('beach');
+    if (beachResults.generations.length > 0 || beachResults.library.length > 0) {
+      setBeachArtFound(beachResults);
+    }
+    
     const savedId = localStorage.getItem('promptstudio_current_project_id');
     if (savedId) {
       const id = Number(savedId);
       if (projs.some(p => p.id === id)) {
         setCurrentProjectId(id);
-        loadProjectData(id);
+        loadProjectData(id); // Force load even if ID didn't change
         return;
       }
     }
 
     if (projs.length > 0) {
       setCurrentProjectId(projs[0].id);
+      const initialGens = await api.getGenerations(projs[0].id);
+      
+      // If server is empty but browser has backup, suggest rescue
+      const backup: Generation[] = await get('browser_generations') || [];
+      if (initialGens.length === 0 && backup.length > 0) {
+        setShowBackupSuggestion(true);
+      }
+      
       loadProjectData(projs[0].id);
     }
   };
 
   const loadProjectData = async (projectId: number) => {
-    const results = await Promise.allSettled([
+    const [h, p, r, s, proj, lib, st] = await Promise.all([
       api.getGenerations(projectId),
       api.getPalettes(projectId),
       api.getReferences(projectId),
@@ -333,31 +447,12 @@ export default function App() {
       api.getLibrary(),
       api.getStyles(projectId)
     ]);
-    const [genR, palR, refR, showR, projR, libR] = results;
-
-    if (genR.status === 'fulfilled') setHistory(genR.value);
-
-    if (palR.status === 'fulfilled' && palR.value.length > 0) {
-      setPalettes(palR.value);
-      await set(`ps_palettes_${projectId}`, palR.value);
-    } else {
-      const cached = await get(`ps_palettes_${projectId}`);
-      if (cached && cached.length > 0) setPalettes(cached);
-      else if (palR.status === 'fulfilled') setPalettes([]);
-    }
-
-    if (refR.status === 'fulfilled' && refR.value.length > 0) {
-      setReferences(refR.value);
-      await set(`ps_references_${projectId}`, refR.value);
-    } else {
-      const cached = await get(`ps_references_${projectId}`);
-      if (cached && cached.length > 0) setReferences(cached);
-      else if (refR.status === 'fulfilled') setReferences([]);
-    }
-
-    if (showR.status === 'fulfilled') setShowcase(showR.value);
-    if (projR.status === 'fulfilled') setProject(projR.value);
-    if (libR.status === 'fulfilled') setLibrary(libR.value);
+    setHistory(h);
+    setPalettes(p);
+    setReferences(r);
+    setShowcase(s);
+    setProject(proj);
+    setLibrary(lib);
   };
 
   const loadData = async () => {
@@ -458,8 +553,8 @@ export default function App() {
         .filter(r => selectedReferences.includes(r.id))
         .map(r => r.image_data);
 
-      // Generate 2 images to avoid rate-limiting
-      const generationPromises = Array(2).fill(null).map(async (_, idx) => {
+      // Generate 4 images in parallel
+      const generationPromises = Array(4).fill(null).map(async (_, idx) => {
         try {
           const image = await generateImage(promptToUse, refImages);
           const res = await api.saveGeneration({
@@ -472,7 +567,8 @@ export default function App() {
             batch_id: batchId,
             selected_references: JSON.stringify(selectedReferences)
           });
-          return {
+          
+          const newGen = {
             id: res.id,
             idea,
             prompt_json: JSON.stringify(promptToUse),
@@ -484,11 +580,13 @@ export default function App() {
             selected_references: JSON.stringify(selectedReferences),
             created_at: new Date().toISOString()
           } as Generation;
-        } catch (err: any) {
+
+          // Save to browser backup immediately
+          await backupGenerationLocally(newGen);
+          
+          return newGen;
+        } catch (err) {
           console.error(`Error generating image ${idx + 1}:`, err);
-          if (err.quota_exhausted || err.needs_upgrade || err.message?.includes('quota') || err.message?.includes('upgrade')) {
-            setHasSelectedKey(false);
-          }
           return null;
         }
       });
@@ -500,16 +598,13 @@ export default function App() {
         setGeneratedImage(results[0].image_data);
         await loadData();
       } else {
-        if (!hasSelectedKey) {
-          // quota banner already shown
-        } else {
-          alert('Image generation failed. Please try again or check the console for details.');
-        }
+        alert('Failed to generate images. Please check your API key or try again.');
       }
     } catch (error: any) {
       console.error(error);
-      if (error.quota_exhausted || error.needs_upgrade || error.message?.includes('quota') || error.message?.includes('upgrade')) {
+      if (error.message?.includes('Requested entity was not found')) {
         setHasSelectedKey(false);
+        alert('Your API key selection seems invalid. Please select a key from a paid Google Cloud project.');
       } else {
         alert('An unexpected error occurred during generation.');
       }
@@ -545,30 +640,10 @@ export default function App() {
     reader.onloadend = async () => {
       try {
         const base64 = reader.result as string;
-        const projectId = currentProjectId || 1;
-        const tempId = Date.now();
-        const timestamp = new Date().toISOString();
-
         if (type === 'reference') {
-          const tempRef = { id: tempId, project_id: projectId, name: file.name, image_data: base64, created_at: timestamp };
-          const newRefs = [...references, tempRef];
-          setReferences(newRefs);
-          await set(`ps_references_${projectId}`, newRefs);
-          try {
-            await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId });
-          } catch (serverErr) {
-            console.warn('Server save failed, reference cached locally:', serverErr);
-          }
+          await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId });
         } else {
-          const tempPal = { id: tempId, project_id: projectId, name: file.name, image_data: base64, created_at: timestamp };
-          const newPals = [...palettes, tempPal];
-          setPalettes(newPals);
-          await set(`ps_palettes_${projectId}`, newPals);
-          try {
-            await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId });
-          } catch (serverErr) {
-            console.warn('Server save failed, palette cached locally:', serverErr);
-          }
+          await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId });
         }
         await loadData();
       } catch (error) {
@@ -796,6 +871,42 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-studio-bg">
+      {/* Backup Suggestion Notification */}
+      {showBackupSuggestion && (
+        <div className="fixed bottom-6 right-6 z-[100] max-w-sm animate-in slide-in-from-right-8 duration-500">
+          <div className="studio-card p-6 border-studio-accent bg-studio-accent/[0.02] shadow-2xl">
+            <div className="flex gap-4">
+              <div className="w-10 h-10 bg-studio-accent/10 rounded-full flex items-center justify-center text-studio-accent shrink-0">
+                <LifeBuoy className="w-5 h-5" />
+              </div>
+              <div className="space-y-3">
+                <h4 className="font-bold text-sm">Restore your images?</h4>
+                <p className="text-xs text-studio-secondary leading-relaxed">
+                  I noticed your server database is empty, but you have <strong>{browserBackupCount} images</strong> saved in this browser.
+                </p>
+                <div className="flex gap-3 pt-1">
+                  <button 
+                    onClick={() => {
+                      setActiveTab('rescue');
+                      setShowBackupSuggestion(false);
+                    }}
+                    className="text-[10px] font-bold uppercase tracking-widest text-studio-accent hover:underline"
+                  >
+                    Go to Rescue Center
+                  </button>
+                  <button 
+                    onClick={() => setShowBackupSuggestion(false)}
+                    className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary hover:text-studio-text"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar - Refined Nav */}
       <nav className="w-full md:w-20 bg-studio-card flex flex-row md:flex-col items-center py-4 md:py-10 gap-6 z-50 border-b md:border-b-0 md:border-r border-studio-border/30">
         <div className="w-10 h-10 bg-studio-accent rounded-2xl flex items-center justify-center mb-0 md:mb-6 shadow-lg shadow-studio-accent/20">
@@ -810,15 +921,21 @@ export default function App() {
             { id: 'library', icon: Library, label: 'Library' },
             { id: 'showcase', icon: FolderHeart, label: 'Showcase' },
             { id: 'project', icon: Layers, label: 'Project' },
-            { id: 'archive', icon: History, label: 'History' }
+            { id: 'archive', icon: History, label: 'History' },
+            { id: 'rescue', icon: LifeBuoy, label: 'Rescue Center' }
           ].map((tab) => (
             <button 
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`p-3 rounded-2xl transition-all ${activeTab === tab.id ? 'bg-studio-accent text-white shadow-md' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-text'}`}
+              className={`p-3 rounded-2xl transition-all relative ${activeTab === tab.id ? 'bg-studio-accent text-white shadow-md' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-text'}`}
               title={tab.label}
             >
               <tab.icon className="w-6 h-6" />
+              {tab.id === 'rescue' && browserBackupCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full border-2 border-studio-card">
+                  {browserBackupCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -850,6 +967,11 @@ export default function App() {
               >
                 <LogOut className="w-6 h-6" />
               </button>
+              {user.id === 'guest' && (
+                <div className="px-2 py-1 bg-amber-100 text-amber-700 text-[8px] font-bold uppercase tracking-tighter rounded border border-amber-200 text-center">
+                  Guest Mode
+                </div>
+              )}
               <div className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors" title={user.name}>
                 <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
               </div>
@@ -859,7 +981,7 @@ export default function App() {
               onClick={handleLogin}
               disabled={isLoggingIn}
               className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
-              title="Sign in with Replit"
+              title="Sign in with Google"
             >
               <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
                 {isLoggingIn ? '...' : <User className="w-5 h-5" />}
@@ -872,21 +994,21 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto h-screen no-scrollbar">
         {!hasSelectedKey && (
-          <div className="bg-amber-600 text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
+          <div className="bg-studio-accent text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
             <div className="flex items-center gap-3">
-              <AlertCircle className="w-5 h-5 shrink-0" />
+              <AlertCircle className="w-5 h-5" />
               <p className="text-sm font-medium">
-                Daily image generation quota reached (resets at midnight Pacific), or your project needs upgrading for unlimited access.
-                <a href="https://ai.dev/projects" target="_blank" rel="noopener noreferrer" className="underline ml-2 hover:text-white/80 font-bold">
-                  Upgrade project at ai.dev →
+                High-quality image generation requires a Gemini API key. 
+                <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-1 hover:text-white/80">
+                  Learn about billing
                 </a>
               </p>
             </div>
-            <button
-              onClick={() => setHasSelectedKey(true)}
-              className="ml-4 bg-white/20 hover:bg-white/30 text-white px-3 py-1 rounded text-xs font-bold shrink-0 transition-colors"
+            <button 
+              onClick={handleSelectKey}
+              className="bg-white text-studio-accent px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-white/90 transition-colors"
             >
-              Dismiss
+              Select API Key
             </button>
           </div>
         )}
@@ -1295,6 +1417,115 @@ export default function App() {
                     </div>
                     <span className="font-bold uppercase tracking-widest text-xs">Create New Project</span>
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'rescue' && (
+            <div className="space-y-12 max-w-4xl mx-auto">
+              <header className="text-center space-y-4">
+                <div className="w-20 h-20 bg-studio-accent/10 rounded-3xl flex items-center justify-center text-studio-accent mx-auto">
+                  <LifeBuoy className="w-10 h-10" />
+                </div>
+                <h1 className="text-4xl font-bold tracking-tight">Rescue Center</h1>
+                <p className="text-studio-secondary max-w-lg mx-auto">
+                  Cloud Run environments are ephemeral, meaning the server's local database can reset. 
+                  Use these tools to recover your data from browser backups or server rescue points.
+                </p>
+              </header>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* Browser Backup Card */}
+                <div className="studio-card p-8 space-y-6 border-studio-accent/20 bg-studio-accent/[0.02]">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-studio-accent/10 rounded-2xl text-studio-accent">
+                      <ShieldCheck className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg">Browser Local Backup</h3>
+                      <p className="text-xs text-studio-secondary">Stored safely in your browser's IndexedDB.</p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-white rounded-2xl border border-studio-border/30">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm text-studio-secondary">Backup Status:</span>
+                      <span className="text-sm font-bold text-emerald-600">Active</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-studio-secondary">Images Saved:</span>
+                      <span className="text-sm font-bold">{browserBackupCount}</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-studio-secondary leading-relaxed">
+                    Every time you generate an image, we save a copy to your browser's local storage. 
+                    If the server resets, you can push these back to the database.
+                  </p>
+
+                  <button 
+                    onClick={restoreFromBrowser}
+                    disabled={isRescuing || browserBackupCount === 0}
+                    className="w-full studio-btn-primary flex items-center justify-center gap-2 py-4"
+                  >
+                    {isRescuing ? (
+                      <>
+                        <RefreshCw className="w-5 h-5 animate-spin" />
+                        Restoring...
+                      </>
+                    ) : (
+                      <>
+                        <CloudUpload className="w-5 h-5" />
+                        Restore {browserBackupCount} Images
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Server Rescue Card */}
+                <div className="studio-card p-8 space-y-6">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-studio-secondary/10 rounded-2xl text-studio-secondary">
+                      <Database className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg">Server Rescue Point</h3>
+                      <p className="text-xs text-studio-secondary">Internal server-side recovery.</p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-studio-bg rounded-2xl border border-studio-border/30">
+                    <p className="text-xs text-studio-secondary text-center py-4">
+                      Attempts to recover data from the server's internal memory or temporary storage.
+                    </p>
+                  </div>
+
+                  <button 
+                    onClick={handleRescue}
+                    disabled={isRescuing}
+                    className="w-full py-4 border border-studio-border rounded-2xl font-bold text-sm hover:bg-studio-bg transition-colors flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw className={`w-5 h-5 ${isRescuing ? 'animate-spin' : ''}`} />
+                    Run Server Rescue
+                  </button>
+
+                  {rescueResult && (
+                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl text-[10px] text-emerald-700 font-mono overflow-x-auto">
+                      {JSON.stringify(rescueResult, null, 2)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6 bg-amber-50 border border-amber-200 rounded-3xl flex gap-4">
+                <AlertCircle className="w-6 h-6 text-amber-600 shrink-0" />
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-amber-900">Pro Tip: Use Supabase for Persistence</p>
+                  <p className="text-xs text-amber-800 leading-relaxed">
+                    To stop losing data permanently, connect a Supabase database in the AI Studio Settings. 
+                    This will replace the ephemeral local database with a persistent Postgres instance.
+                  </p>
                 </div>
               </div>
             </div>

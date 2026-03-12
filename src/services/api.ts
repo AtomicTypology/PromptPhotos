@@ -75,8 +75,6 @@ export interface AuthUser {
   email: string;
   name: string;
   picture: string;
-  first_name?: string;
-  last_name?: string;
 }
 
 const handleResponse = async (res: Response) => {
@@ -88,6 +86,12 @@ const handleResponse = async (res: Response) => {
     } catch (e) {
       errorData = { error: text || `Request failed with status ${res.status}` };
     }
+    
+    // If it's a 401, we want to make sure the user knows they need to log in
+    if (res.status === 401) {
+      throw new Error(errorData.details || "Unauthorized: Please sign in to continue.");
+    }
+    
     throw new Error(errorData.details || errorData.error || `Request failed with status ${res.status}`);
   }
   const text = await res.text();
@@ -253,10 +257,17 @@ export const api = {
     const res = await fetch("/api/purge", { method: "POST" });
     await handleResponse(res);
   },
-  getMe: async (): Promise<AuthUser | null> => {
-    const res = await fetch("/api/auth/user");
-    if (res.status === 401) return null;
+  getAuthUrl: async (): Promise<{ url: string }> => {
+    const res = await fetch("/api/auth/url");
     return handleResponse(res);
+  },
+  getMe: async (): Promise<AuthUser | null> => {
+    const res = await fetch("/api/me");
+    return handleResponse(res);
+  },
+  logout: async (): Promise<void> => {
+    const res = await fetch("/api/logout", { method: "POST" });
+    await handleResponse(res);
   },
   syncToGCS: async (): Promise<void> => {
     const res = await fetch("/api/sync", { method: "POST" });
