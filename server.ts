@@ -19,7 +19,16 @@ declare global {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("promptstudio.db");
+let db: any;
+try {
+  db = new Database("promptstudio.db");
+  console.log("Local SQLite database initialized.");
+} catch (err) {
+  console.error("Failed to initialize SQLite database:", err);
+  // Fallback to in-memory if file fails
+  db = new Database(":memory:");
+  console.log("Using in-memory SQLite database as fallback.");
+}
 
 // Supabase Client (if configured)
 const supabaseUrl = process.env.SUPABASE_URL || "https://snwofoypavgrcpdpymlj.supabase.co";
@@ -71,7 +80,8 @@ if (bucket) {
 }
 
 // Initialize database
-db.exec(`
+try {
+  db.exec(`
   CREATE TABLE IF NOT EXISTS generations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER DEFAULT 1,
@@ -136,6 +146,9 @@ db.exec(`
   INSERT OR IGNORE INTO project_settings (id, name, brief, global_style) 
   VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist');
 `);
+} catch (err) {
+  console.error("Database schema execution failed:", err);
+}
 
 // Add user_id and image_url columns to local DB for compatibility
 const tables = ['generations', 'styles', 'palettes', 'references_images', 'showcase', 'prompt_library', 'project_settings'];
@@ -243,6 +256,15 @@ async function uploadToSupabase(base64Data: string, bucketName: string, fileName
   }
 }
 
+// Helper to get the correct redirect URI
+const getRedirectUri = (req: express.Request) => {
+  const protocol = req.get('x-forwarded-proto') || req.protocol;
+  const host = req.get('host');
+  const detectedUrl = `${protocol}://${host}`;
+  const baseUrl = process.env.APP_URL || detectedUrl;
+  return `${baseUrl.replace(/\/$/, "")}/auth/callback`;
+};
+
 async function startServer() {
   try {
     const app = express();
@@ -260,21 +282,13 @@ async function startServer() {
 
   // Auth Routes
   app.get("/api/auth/debug", (req, res) => {
-    const protocol = req.get('x-forwarded-proto') || req.protocol;
-    const host = req.get('host');
-    const detectedUrl = `${protocol}://${host}`;
-    const baseUrl = process.env.APP_URL || detectedUrl;
-    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
-    const redirectUri = `${normalizedBaseUrl}/auth/callback`;
+    const redirectUri = getRedirectUri(req);
     
     res.json({
       envAppUrl: process.env.APP_URL || "NOT SET",
       reqProtocol: req.protocol,
       reqHost: req.get('host'),
       xForwardedProto: req.get('x-forwarded-proto'),
-      detectedUrl,
-      baseUrl,
-      normalizedBaseUrl,
       redirectUri,
       googleClientId: googleClientId || "MISSING",
       googleClientSecret: googleClientSecret ? "SET" : "MISSING",
@@ -287,10 +301,7 @@ async function startServer() {
       return res.status(500).json({ error: "Google OAuth not configured" });
     }
     
-    // Use the current request's host and protocol to ensure the redirect URI matches the environment
-    const protocol = req.get('x-forwarded-proto') || req.protocol;
-    const host = req.get('host');
-    const redirectUri = `${protocol}://${host}/auth/callback`;
+    const redirectUri = getRedirectUri(req);
     
     console.log("DEBUG: Generating Auth URL");
     console.log("DEBUG: redirectUri:", redirectUri);
@@ -310,10 +321,7 @@ async function startServer() {
     }
 
     try {
-      // Use dynamic redirect URI to match the environment
-      const protocol = req.get('x-forwarded-proto') || req.protocol;
-      const host = req.get('host');
-      const redirectUri = `${protocol}://${host}/auth/callback`;
+      const redirectUri = getRedirectUri(req);
       
       const { tokens } = await oauth2Client.getToken({
         code: code as string,
