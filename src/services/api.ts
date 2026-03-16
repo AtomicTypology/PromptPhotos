@@ -77,6 +77,15 @@ export interface AuthUser {
   picture: string;
 }
 
+export interface LoginCredentials {
+  email: string;
+  password: string;
+}
+
+export interface SignupCredentials extends LoginCredentials {
+  name: string;
+}
+
 const handleResponse = async (res: Response) => {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -99,6 +108,22 @@ const handleResponse = async (res: Response) => {
 };
 
 export const api = {
+  signup: async (data: SignupCredentials): Promise<AuthUser> => {
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+  login: async (data: LoginCredentials): Promise<AuthUser> => {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
   getProjects: async (): Promise<ProjectSettings[]> => {
     const res = await fetch("/api/projects");
     return handleResponse(res);

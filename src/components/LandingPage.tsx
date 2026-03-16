@@ -1,29 +1,40 @@
 import React from 'react';
-import { LogIn, Sparkles, Shield, Zap, Globe, Layout, Palette, FolderHeart, X } from 'lucide-react';
+import { LogIn, Sparkles, Shield, Zap, Globe, Layout, Palette, FolderHeart, UserPlus } from 'lucide-react';
 
 interface LandingPageProps {
-  onLogin: () => void;
-  isLoggingIn: boolean;
+  onLogin: (data: { email: string; password: string }) => Promise<void>;
+  onSignup: (data: { name: string; email: string; password: string }) => Promise<void>;
+  isAuthenticating: boolean;
+  authError: string | null;
   onContinueAsGuest: () => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, isLoggingIn, onContinueAsGuest }) => {
-  const [debugInfo, setDebugInfo] = React.useState<any>(null);
-  const [showDebug, setShowDebug] = React.useState(false);
-  const [isLoadingDebug, setIsLoadingDebug] = React.useState(false);
+export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onSignup, isAuthenticating, authError, onContinueAsGuest }) => {
+  const [mode, setMode] = React.useState<'login' | 'signup'>('login');
+  const [name, setName] = React.useState('');
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [localError, setLocalError] = React.useState<string | null>(null);
 
-  const handleFetchDebug = async () => {
-    setIsLoadingDebug(true);
-    try {
-      const res = await fetch('/api/auth/debug');
-      const data = await res.json();
-      setDebugInfo(data);
-      setShowDebug(true);
-    } catch (err) {
-      alert('Failed to fetch debug info');
-    } finally {
-      setIsLoadingDebug(false);
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLocalError(null);
+
+    if (mode === 'signup') {
+      if (!name.trim()) {
+        setLocalError('Please enter your name.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setLocalError('Passwords do not match.');
+        return;
+      }
+      await onSignup({ name: name.trim(), email, password });
+      return;
     }
+
+    await onLogin({ email, password });
   };
 
   return (
@@ -36,125 +47,33 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, isLoggingIn, 
           </div>
           <span className="font-bold text-xl tracking-tight">PromptStudio</span>
         </div>
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={handleFetchDebug}
-            disabled={isLoadingDebug}
-            className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary hover:text-studio-accent transition-colors"
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              setMode('login');
+              setLocalError(null);
+            }}
+            className={`text-sm font-medium transition-colors ${mode === 'login' ? 'text-studio-accent' : 'text-studio-secondary hover:text-studio-accent'}`}
           >
-            {isLoadingDebug ? 'Checking...' : 'Debug Connection'}
+            Sign In
           </button>
-          <div className="hidden lg:flex flex-col items-end">
-            <span className="text-[10px] font-bold text-studio-secondary uppercase tracking-widest">Redirect URI for Google Console</span>
-            <code className="text-[10px] bg-studio-bg px-2 py-0.5 rounded border border-studio-border/50">
-              {window.location.origin}/auth/callback
-            </code>
-          </div>
+          <button
+            onClick={() => {
+              setMode('signup');
+              setLocalError(null);
+            }}
+            className={`text-sm font-medium transition-colors ${mode === 'signup' ? 'text-studio-accent' : 'text-studio-secondary hover:text-studio-accent'}`}
+          >
+            Create Account
+          </button>
           <button 
             onClick={onContinueAsGuest}
             className="text-studio-secondary hover:text-studio-accent text-sm font-medium transition-colors"
           >
             Continue as Guest
           </button>
-          <button 
-            onClick={onLogin}
-            disabled={isLoggingIn}
-            className="studio-btn-primary flex items-center gap-2 text-sm"
-          >
-            <LogIn className="w-4 h-4" />
-            {isLoggingIn ? 'Connecting...' : 'Sign In'}
-          </button>
         </div>
       </nav>
-
-      {/* Debug Modal */}
-      {showDebug && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[80vh] overflow-y-auto p-8 shadow-2xl border border-studio-border/30">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-2xl font-bold flex items-center gap-2">
-                <Shield className="w-6 h-6 text-studio-accent" />
-                Auth Debug Diagnostics
-              </h3>
-              <button onClick={() => setShowDebug(false)} className="p-2 hover:bg-studio-bg rounded-full transition-colors">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            
-            <div className="space-y-6">
-              <div className="p-4 bg-studio-bg rounded-2xl border border-studio-border/30">
-                <h4 className="text-xs font-bold uppercase tracking-widest text-studio-secondary mb-3">Server Configuration</h4>
-                <div className="grid grid-cols-1 gap-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-studio-secondary">APP_URL Env:</span>
-                    <span className={`font-mono ${debugInfo?.envAppUrl === 'NOT SET' ? 'text-red-500' : 'text-emerald-600'}`}>{debugInfo?.envAppUrl}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-studio-secondary">Detected Protocol:</span>
-                    <span className="font-mono">{debugInfo?.reqProtocol}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-studio-secondary">Detected Host:</span>
-                    <span className="font-mono">{debugInfo?.reqHost}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-studio-secondary">X-Forwarded-Proto:</span>
-                    <span className="font-mono">{debugInfo?.xForwardedProto || 'NONE'}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 bg-studio-accent/5 rounded-2xl border border-studio-accent/20">
-                <h4 className="text-xs font-bold uppercase tracking-widest text-studio-accent mb-3">Calculated Redirect URI</h4>
-                <p className="text-xs text-studio-secondary mb-2">This is what the server is sending to Google:</p>
-                <code className="block p-3 bg-white rounded-xl border border-studio-accent/20 text-xs font-mono break-all text-studio-accent font-bold">
-                  {debugInfo?.redirectUri}
-                </code>
-                <p className="text-[10px] text-studio-secondary mt-3 italic">
-                  * This MUST exactly match what you have in the Google Cloud Console.
-                </p>
-              </div>
-
-              <div className="p-4 bg-studio-bg rounded-2xl border border-studio-border/30">
-                <h4 className="text-xs font-bold uppercase tracking-widest text-studio-secondary mb-3">Google Credentials</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-3 bg-white rounded-xl border border-studio-border/30">
-                    <div className="flex justify-between items-center mb-1">
-                      <p className="text-[10px] uppercase font-bold text-studio-secondary">Client ID</p>
-                      <button 
-                        onClick={() => {
-                          navigator.clipboard.writeText(debugInfo?.googleClientId);
-                          alert('Client ID copied!');
-                        }}
-                        className="text-[10px] text-studio-accent font-bold hover:underline"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <p className={`text-sm font-mono break-all ${debugInfo?.googleClientId === 'MISSING' ? 'text-red-500' : 'text-emerald-600'}`}>{debugInfo?.googleClientId}</p>
-                  </div>
-                  <div className="p-3 bg-white rounded-xl border border-studio-border/30">
-                    <p className="text-[10px] uppercase font-bold text-studio-secondary mb-1">Client Secret</p>
-                    <p className={`text-sm font-bold ${debugInfo?.googleClientSecret === 'SET' ? 'text-emerald-600' : 'text-red-500'}`}>{debugInfo?.googleClientSecret}</p>
-                  </div>
-                </div>
-                {(debugInfo?.googleClientId === 'MISSING' || debugInfo?.googleClientSecret === 'MISSING') && (
-                  <p className="text-xs text-red-500 mt-3 font-medium">
-                    Critical: You must set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in AI Studio Settings.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <button 
-              onClick={() => setShowDebug(false)}
-              className="w-full mt-8 py-4 bg-studio-accent text-white rounded-2xl font-bold hover:opacity-90 transition-opacity"
-            >
-              Close Diagnostics
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Hero Section */}
       <main className="flex-1">
@@ -167,47 +86,135 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, isLoggingIn, 
             Design. Refine. <span className="text-studio-accent">Generate.</span>
           </h1>
           <p className="text-xl text-studio-secondary max-w-2xl mx-auto mb-10 animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-200">
-            A professional workspace for AI-assisted design. Build mood boards, manage prompt libraries, and iterate on generations with precision.
+            Sign in with email and password to keep your projects, prompts, and mood boards together in one workspace.
           </p>
           <div className="flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
-            <button 
-              onClick={onLogin}
-              disabled={isLoggingIn}
-              className="w-full sm:w-auto px-8 py-4 bg-studio-accent text-white rounded-2xl font-bold text-lg shadow-xl shadow-studio-accent/20 hover:scale-105 transition-all flex items-center justify-center gap-3"
-            >
-              <LogIn className="w-5 h-5" />
-              {isLoggingIn ? 'Signing in...' : 'Sign In with Google'}
-            </button>
-            
-            <div className="max-w-md w-full p-6 bg-amber-50 border border-amber-200 rounded-3xl text-left">
-              <h4 className="font-bold text-amber-900 flex items-center gap-2 mb-2">
-                <Shield className="w-4 h-4" />
-                Trouble Signing In?
-              </h4>
-              <p className="text-xs text-amber-800 mb-4">
-                If you see a "redirect_uri_mismatch" error, ensure your Google Cloud Console is configured with this exact URI:
-              </p>
-              <div className="flex items-center gap-2 mb-4">
-                <code className="flex-1 bg-white p-2 rounded-lg border border-amber-200 text-[10px] font-mono break-all">
-                  {window.location.origin}/auth/callback
-                </code>
-                <button 
+            <div className="w-full max-w-md text-left bg-white p-8 rounded-3xl border border-studio-border/30 shadow-xl">
+              <div className="flex items-center gap-2 p-1 mb-6 bg-studio-bg rounded-2xl">
+                <button
+                  type="button"
                   onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/auth/callback`);
-                    alert('Copied to clipboard!');
+                    setMode('login');
+                    setLocalError(null);
                   }}
-                  className="p-2 bg-amber-200 text-amber-900 rounded-lg hover:bg-amber-300 transition-colors"
-                  title="Copy to clipboard"
+                  className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${mode === 'login' ? 'bg-white text-studio-accent shadow-sm' : 'text-studio-secondary'}`}
                 >
-                  <Shield className="w-4 h-4" />
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signup');
+                    setLocalError(null);
+                  }}
+                  className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${mode === 'signup' ? 'bg-white text-studio-accent shadow-sm' : 'text-studio-secondary'}`}
+                >
+                  Create Account
                 </button>
               </div>
-              <button 
-                onClick={onContinueAsGuest}
-                className="w-full py-2 bg-white border border-amber-200 text-amber-900 rounded-xl text-xs font-bold hover:bg-amber-100 transition-colors"
-              >
-                Skip for now (Continue as Guest)
-              </button>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {mode === 'signup' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full studio-input"
+                      placeholder="Creative lead"
+                      autoComplete="name"
+                    />
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full studio-input"
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full studio-input"
+                    placeholder="At least 8 characters"
+                    autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                    minLength={8}
+                    required
+                  />
+                </div>
+                {mode === 'signup' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Confirm Password</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full studio-input"
+                      placeholder="Repeat your password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      required
+                    />
+                  </div>
+                )}
+
+                {(localError || authError) && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {localError || authError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isAuthenticating}
+                  className="w-full px-8 py-4 bg-studio-accent text-white rounded-2xl font-bold text-lg shadow-xl shadow-studio-accent/20 hover:scale-[1.01] transition-all flex items-center justify-center gap-3 disabled:opacity-70 disabled:hover:scale-100"
+                >
+                  {mode === 'login' ? <LogIn className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
+                  {isAuthenticating ? 'Working...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+                </button>
+              </form>
+
+              <div className="mt-5 pt-5 border-t border-studio-border/30 space-y-3">
+                <p className="text-xs text-studio-secondary">
+                  {mode === 'login' ? "Don't have an account yet?" : 'Already have an account?'}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode(mode === 'login' ? 'signup' : 'login');
+                      setLocalError(null);
+                    }}
+                    className="ml-2 font-bold text-studio-accent hover:underline"
+                  >
+                    {mode === 'login' ? 'Create one' : 'Sign in instead'}
+                  </button>
+                </p>
+                <button 
+                  onClick={onContinueAsGuest}
+                  className="w-full py-2 bg-studio-bg border border-studio-border/30 text-studio-secondary rounded-xl text-xs font-bold hover:text-studio-accent transition-colors"
+                >
+                  Continue as Guest
+                </button>
+              </div>
+            </div>
+
+            <div className="max-w-md w-full p-6 bg-emerald-50 border border-emerald-200 rounded-3xl text-left">
+              <h4 className="font-bold text-emerald-900 flex items-center gap-2 mb-2">
+                <Shield className="w-4 h-4" />
+                Simpler sign-in
+              </h4>
+              <p className="text-xs text-emerald-800 leading-relaxed">
+                Google OAuth is no longer required here. Create an account with your email and password, and the app will keep using the same session-based flow after sign-in.
+              </p>
             </div>
           </div>
         </section>

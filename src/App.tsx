@@ -34,13 +34,11 @@ import {
   RefreshCw,
   ShieldCheck,
   Cloud,
-  CloudUpload,
-  CloudDownload,
   LogOut,
   User
 } from 'lucide-react';
 import { get, set } from 'idb-keyval';
-import { generateStructuredPrompt, generateImage, StructuredPrompt, generateMoodboard, Moodboard, critiqueImage, Critique } from './services/gemini';
+import { generateStructuredPrompt, generateImage, StructuredPrompt, generateMoodboard, Moodboard, critiqueImage, Critique, hasConfiguredGeminiApiKey, saveGeminiApiKey } from './services/gemini';
 import { api, Generation, StyleTemplate, Palette as PaletteType, ReferenceImage, ShowcaseItem, Comment, ProjectSettings, PromptLibraryItem, AuthUser } from './services/api';
 import { LandingPage } from './components/LandingPage';
 
@@ -54,7 +52,8 @@ declare global {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project'>('dashboard');
+  const getUserInitial = (name?: string) => name?.trim().charAt(0).toUpperCase() || 'U';
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project' | 'rescue'>('dashboard');
   const [idea, setIdea] = useState('');
   const [parentGeneration, setParentGeneration] = useState<Generation | null>(null);
   const [structuredPrompt, setStructuredPrompt] = useState<StructuredPrompt | null>(null);
@@ -173,13 +172,19 @@ export default function App() {
   const paletteUploadRef = useRef<HTMLInputElement>(null);
   const csvUploadRef = useRef<HTMLInputElement>(null);
 
-  const [hasSelectedKey, setHasSelectedKey] = useState(true);
+  const [hasSelectedKey, setHasSelectedKey] = useState(() => hasConfiguredGeminiApiKey());
 
   useEffect(() => {
     const checkKey = async () => {
+      if (hasConfiguredGeminiApiKey()) {
+        setHasSelectedKey(true);
+        return;
+      }
       if (window.aistudio?.hasSelectedApiKey) {
         const has = await window.aistudio.hasSelectedApiKey();
         setHasSelectedKey(has);
+      } else {
+        setHasSelectedKey(false);
       }
     };
     checkKey();
@@ -188,13 +193,29 @@ export default function App() {
   const handleSelectKey = async () => {
     if (window.aistudio?.openSelectKey) {
       await window.aistudio.openSelectKey();
+      const has = window.aistudio?.hasSelectedApiKey
+        ? await window.aistudio.hasSelectedApiKey()
+        : true;
+      setHasSelectedKey(has || hasConfiguredGeminiApiKey());
+      return;
+    }
+
+    const pastedKey = window.prompt(
+      'Paste your Gemini API key. It will be saved only in this browser for local use on this computer.'
+    );
+
+    if (pastedKey?.trim()) {
+      saveGeminiApiKey(pastedKey);
       setHasSelectedKey(true);
+    } else {
+      setHasSelectedKey(hasConfiguredGeminiApiKey());
     }
   };
 
   const [autoDevelop, setAutoDevelop] = useState(true);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -208,30 +229,35 @@ export default function App() {
     fetchUser();
   }, []);
 
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
+  const handleLogin = async (credentials: { email: string; password: string }) => {
+    setIsAuthenticating(true);
+    setAuthError(null);
     try {
-      const { url } = await api.getAuthUrl();
-      const authWindow = window.open(url, 'google_oauth', 'width=600,height=700');
-      
-      if (!authWindow) {
-        alert('Please allow popups to sign in with Google');
-        return;
-      }
-
-      const handleMessage = async (event: MessageEvent) => {
-        if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-          const userData = await api.getMe();
-          setUser(userData);
-          window.removeEventListener('message', handleMessage);
-          loadInitialData();
-        }
-      };
-      window.addEventListener('message', handleMessage);
+      const userData = await api.login(credentials);
+      setUser(userData);
+      setIsGuest(false);
+      await loadInitialData();
     } catch (error) {
       console.error("Login failed:", error);
+      setAuthError(error instanceof Error ? error.message : 'Unable to sign in.');
     } finally {
-      setIsLoggingIn(false);
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleSignup = async (credentials: { name: string; email: string; password: string }) => {
+    setIsAuthenticating(true);
+    setAuthError(null);
+    try {
+      const userData = await api.signup(credentials);
+      setUser(userData);
+      setIsGuest(false);
+      await loadInitialData();
+    } catch (error) {
+      console.error("Signup failed:", error);
+      setAuthError(error instanceof Error ? error.message : 'Unable to create account.');
+    } finally {
+      setIsAuthenticating(false);
     }
   };
 
@@ -239,6 +265,8 @@ export default function App() {
     try {
       await api.logout();
       setUser(null);
+      setIsGuest(false);
+      setAuthError(null);
       loadInitialData();
     } catch (error) {
       console.error("Logout failed:", error);
@@ -553,10 +581,13 @@ export default function App() {
         .filter(r => selectedReferences.includes(r.id))
         .map(r => r.image_data);
 
-      // Generate 4 images in parallel
-      const generationPromises = Array(4).fill(null).map(async (_, idx) => {
+      const variationCount = 4;
+      let firstError: unknown = null;
+
+      // Generate 4 distinct variations in parallel
+      const generationPromises = Array(variationCount).fill(null).map(async (_, idx) => {
         try {
-          const image = await generateImage(promptToUse, refImages);
+          const image = await generateImage(promptToUse, refImages, idx, variationCount);
           const res = await api.saveGeneration({
             idea,
             prompt_json: JSON.stringify(promptToUse),
@@ -586,6 +617,9 @@ export default function App() {
           
           return newGen;
         } catch (err) {
+          if (!firstError) {
+            firstError = err;
+          }
           console.error(`Error generating image ${idx + 1}:`, err);
           return null;
         }
@@ -597,12 +631,18 @@ export default function App() {
         setBatchResults(results);
         setGeneratedImage(results[0].image_data);
         await loadData();
+      } else if (firstError instanceof Error && firstError.message?.includes('Gemini API key is not set')) {
+        setHasSelectedKey(false);
+        alert('Gemini API key is not set. Click Select API Key to paste one for this browser, or add GEMINI_API_KEY to your local env and restart the app.');
       } else {
         alert('Failed to generate images. Please check your API key or try again.');
       }
     } catch (error: any) {
       console.error(error);
-      if (error.message?.includes('Requested entity was not found')) {
+      if (error.message?.includes('Gemini API key is not set')) {
+        setHasSelectedKey(false);
+        alert('Gemini API key is not set. Click Select API Key to paste one for this browser, or add GEMINI_API_KEY to your local env and restart the app.');
+      } else if (error.message?.includes('Requested entity was not found')) {
         setHasSelectedKey(false);
         alert('Your API key selection seems invalid. Please select a key from a paid Google Cloud project.');
       } else {
@@ -751,40 +791,122 @@ export default function App() {
     setSelectedForCritique(null);
   };
 
-  const handleCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const parseCSVRows = (text: string) => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = '';
+    let inQuotes = false;
+    const normalized = text.replace(/^\uFEFF/, '');
+
+    for (let i = 0; i < normalized.length; i++) {
+      const char = normalized[i];
+      const nextChar = normalized[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+
+      if (char === ',' && !inQuotes) {
+        row.push(field);
+        field = '';
+        continue;
+      }
+
+      if ((char === '\n' || char === '\r') && !inQuotes) {
+        row.push(field);
+        field = '';
+
+        if (row.some(cell => cell.trim() !== '')) {
+          rows.push(row);
+        }
+
+        row = [];
+
+        if (char === '\r' && nextChar === '\n') {
+          i++;
+        }
+        continue;
+      }
+
+      field += char;
+    }
+
+    row.push(field);
+    if (row.some(cell => cell.trim() !== '')) {
+      rows.push(row);
+    }
+
+    return rows;
+  };
+
+  const handleCSVImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split('\n');
-      const items: Omit<PromptLibraryItem, "id" | "created_at">[] = [];
-      
-      // Basic CSV parsing (Category, Title, Prompt)
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        
-        // Handle quotes in CSV
-        const parts = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-        if (parts && parts.length >= 3) {
-          items.push({
-            category: parts[0].replace(/"/g, ''),
-            title: parts[1].replace(/"/g, ''),
-            prompt: parts[2].replace(/"/g, ''),
-            project_id: 1
-          });
-        }
+    try {
+      const text = await file.text();
+      const rows = parseCSVRows(text);
+
+      if (rows.length === 0) {
+        alert('CSV file is empty.');
+        return;
       }
 
-      if (items.length > 0) {
-        await api.importLibrary(items);
-        loadData();
+      const firstRow = rows[0].map(cell => cell.trim().toLowerCase());
+      const hasHeader = firstRow.length >= 3
+        && (firstRow[0] === 'category' || firstRow[0] === '')
+        && (firstRow[1] === 'title' || firstRow[1] === 'subcategory')
+        && firstRow[2] === 'prompt';
+
+      const dataRows = hasHeader ? rows.slice(1) : rows;
+      const items: Omit<PromptLibraryItem, "id" | "created_at">[] = [];
+      let skippedRows = 0;
+
+      for (const row of dataRows) {
+        if (row.every(cell => cell.trim() === '')) continue;
+
+        const [category = '', title = '', ...promptParts] = row;
+        const prompt = promptParts.join(',');
+
+        if (!category.trim() || !title.trim() || !prompt.trim()) {
+          skippedRows++;
+          continue;
+        }
+
+        items.push({
+          category: category.trim(),
+          title: title.trim(),
+          prompt: prompt.trim(),
+          project_id: 1
+        });
+      }
+
+      if (items.length === 0) {
+        alert('No valid prompt rows were found. Use columns: Category, Title or Subcategory, Prompt.');
+        return;
+      }
+
+      await api.importLibrary(items);
+      await loadData();
+
+      if (skippedRows > 0) {
+        alert(`Imported ${items.length} prompts. Skipped ${skippedRows} incomplete row(s).`);
+      } else {
         alert(`Imported ${items.length} prompts.`);
       }
-    };
-    reader.readAsText(file);
+    } catch (error) {
+      console.error('CSV import failed:', error);
+      alert(error instanceof Error ? error.message : 'Failed to import CSV.');
+    } finally {
+      input.value = '';
+    }
   };
 
   const handleCSVExport = () => {
@@ -862,8 +984,10 @@ export default function App() {
   if (!user && !isGuest) {
     return (
       <LandingPage 
-        onLogin={handleLogin} 
-        isLoggingIn={isLoggingIn} 
+        onLogin={handleLogin}
+        onSignup={handleSignup}
+        isAuthenticating={isAuthenticating}
+        authError={authError}
         onContinueAsGuest={() => setIsGuest(true)} 
       />
     );
@@ -958,7 +1082,7 @@ export default function App() {
                 className={`p-3 rounded-2xl transition-all ${isSyncing ? 'animate-pulse text-studio-accent' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-accent'}`}
                 title="Sync to Google Cloud"
               >
-                <CloudUpload className="w-6 h-6" />
+                <Cloud className="w-6 h-6" />
               </button>
               <button 
                 onClick={handleLogout}
@@ -973,18 +1097,26 @@ export default function App() {
                 </div>
               )}
               <div className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors" title={user.name}>
-                <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                {user.picture ? (
+                  <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
+                    {getUserInitial(user.name)}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
             <button 
-              onClick={handleLogin}
-              disabled={isLoggingIn}
+              onClick={() => {
+                setIsGuest(false);
+                setAuthError(null);
+              }}
               className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
-              title="Sign in with Google"
+              title="Sign in or create an account"
             >
               <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-xs">
-                {isLoggingIn ? '...' : <User className="w-5 h-5" />}
+                <User className="w-5 h-5" />
               </div>
             </button>
           )}
@@ -1051,7 +1183,13 @@ export default function App() {
                   <div className="flex items-center gap-4 p-4 bg-studio-card rounded-2xl border border-studio-border/30 shadow-sm">
                     <div className="w-12 h-12 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden">
                       {user ? (
-                        <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        user.picture ? (
+                          <img src={user.picture} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
+                            {getUserInitial(user.name)}
+                          </div>
+                        )
                       ) : (
                         <div className="w-full h-full bg-gradient-to-br from-studio-accent to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
                           ?
@@ -1188,11 +1326,10 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {searchResults.library.map(l => (
                           <div key={l.id} className="studio-card p-4 cursor-pointer" onClick={() => {
-                            setCurrentProjectId(l.project_id);
                             setActiveTab('library');
                             setSearchResults(null);
                           }}>
-                            <p className="text-xs font-bold text-studio-accent uppercase mb-1">{l.project_name}</p>
+                            <p className="text-xs font-bold text-studio-accent uppercase mb-1">Agency Library</p>
                             <h4 className="font-bold text-sm mb-1">{l.title}</h4>
                             <p className="text-xs text-studio-secondary line-clamp-2">{l.prompt}</p>
                           </div>
@@ -1476,7 +1613,7 @@ export default function App() {
                       </>
                     ) : (
                       <>
-                        <CloudUpload className="w-5 h-5" />
+                        <Cloud className="w-5 h-5" />
                         Restore {browserBackupCount} Images
                       </>
                     )}
@@ -2033,8 +2170,8 @@ export default function App() {
                 {library.length === 0 && (
                   <div className="col-span-full studio-card border-dashed p-20 text-center text-studio-secondary">
                     <FileText className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                    <p className="text-lg font-medium">Your library is empty for this project.</p>
-                    <p className="text-sm">Try switching projects at the top or import a CSV to get started.</p>
+                    <p className="text-lg font-medium">Your shared agency library is empty.</p>
+                    <p className="text-sm">Import a CSV or save prompts from any project to get started.</p>
                   </div>
                 )}
               </div>
