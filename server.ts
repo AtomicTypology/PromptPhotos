@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
@@ -15,6 +16,9 @@ declare global {
     }
   }
 }
+
+dotenv.config();
+dotenv.config({ path: ".env.local", override: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +68,11 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const gcsBucketName = process.env.GCS_BUCKET_NAME;
 const sessionSecret = process.env.SESSION_SECRET || "prompt-studio-secret";
+const configuredAppUrl = process.env.APP_URL?.trim();
+const isSecureCookie = configuredAppUrl
+  ? configuredAppUrl.startsWith("https://")
+  : process.env.NODE_ENV === "production";
+const cookieSameSite = isSecureCookie ? "none" : "lax";
 
 const oauth2Client = (googleClientId && googleClientSecret) 
   ? new OAuth2Client(googleClientId, googleClientSecret) 
@@ -261,14 +270,14 @@ const getRedirectUri = (req: express.Request) => {
   const protocol = req.get('x-forwarded-proto') || req.protocol;
   const host = req.get('host');
   const detectedUrl = `${protocol}://${host}`;
-  const baseUrl = process.env.APP_URL || detectedUrl;
+  const baseUrl = configuredAppUrl || detectedUrl;
   return `${baseUrl.replace(/\/$/, "")}/auth/callback`;
 };
 
 async function startServer() {
   try {
     const app = express();
-    const PORT = 3000;
+    const PORT = Number(process.env.PORT || 3000);
 
     app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
@@ -276,8 +285,9 @@ async function startServer() {
       name: 'session',
       keys: [sessionSecret],
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      secure: true,
-      sameSite: 'none'
+      secure: isSecureCookie,
+      sameSite: cookieSameSite,
+      httpOnly: true
     }));
 
   // Auth Routes
@@ -285,11 +295,13 @@ async function startServer() {
     const redirectUri = getRedirectUri(req);
     
     res.json({
-      envAppUrl: process.env.APP_URL || "NOT SET",
+      envAppUrl: configuredAppUrl || "NOT SET",
       reqProtocol: req.protocol,
       reqHost: req.get('host'),
       xForwardedProto: req.get('x-forwarded-proto'),
       redirectUri,
+      secureCookie: isSecureCookie,
+      cookieSameSite,
       googleClientId: googleClientId || "MISSING",
       googleClientSecret: googleClientSecret ? "SET" : "MISSING",
       sessionSecret: sessionSecret === "prompt-studio-secret" ? "DEFAULT" : "CUSTOM"
