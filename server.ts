@@ -320,7 +320,7 @@ async function startServer() {
     
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
+      scope: ['openid', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
       redirect_uri: redirectUri
     });
     res.json({ url });
@@ -341,8 +341,12 @@ async function startServer() {
       });
       oauth2Client.setCredentials(tokens);
 
+      if (!tokens.id_token) {
+        throw new Error("Google OAuth response did not include an id_token. Ensure the OpenID scope is requested.");
+      }
+
       const ticket = await oauth2Client.verifyIdToken({
-        idToken: tokens.id_token!,
+        idToken: tokens.id_token,
         audience: googleClientId,
       });
       const payload = ticket.getPayload();
