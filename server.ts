@@ -1,13 +1,12 @@
-import dotenv from "dotenv";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
+import { OAuth2Client } from "google-auth-library";
 import { Storage } from "@google-cloud/storage";
 import cookieSession from "cookie-session";
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 declare global {
   namespace Express {
@@ -16,9 +15,6 @@ declare global {
     }
   }
 }
-
-dotenv.config();
-dotenv.config({ path: ".env.local", override: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,8 +31,8 @@ try {
 }
 
 // Supabase Client (if configured)
-const supabaseUrl = process.env.SUPABASE_URL?.trim();
-const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
+const supabaseUrl = process.env.SUPABASE_URL || "https://snwofoypavgrcpdpymlj.supabase.co";
+const supabaseKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNud29mb3lwYXZncmNwZHB5bWxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDg5NDgsImV4cCI6MjA4ODcyNDk0OH0.h2Swp87Sfuq_2sGLud4brsIhDwCj_I0TLkflVFJ5-JY";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 let supabase: any = null;
@@ -56,33 +52,47 @@ if (supabaseUrl && supabaseKey && supabaseUrl.startsWith("http")) {
 
 if (supabase) {
   console.log("Supabase (Persistent Postgres) configured.");
+  supabase.from('users').select('*', { count: 'exact', head: true }).limit(1).then(({ error }: any) => {
+    if (error) console.error("Supabase connection test failed:", error.message);
+    else console.log("Supabase connection test successful.");
+  });
   if (supabaseAdmin) {
     console.log("Supabase Admin (Service Role) configured for storage.");
   }
 } else {
-  console.log("Using local SQLite. Add SUPABASE_URL and SUPABASE_ANON_KEY for Supabase persistence.");
+  console.log("Using local SQLite (Ephemeral). Add SUPABASE_URL and SUPABASE_ANON_KEY for persistence.");
 }
 
-// Cloud/Session Configuration
+// Google Cloud Configuration
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const gcsBucketName = process.env.GCS_BUCKET_NAME;
 const sessionSecret = process.env.SESSION_SECRET || "prompt-studio-secret";
-const configuredAppUrl = process.env.APP_URL?.trim();
-const isSecureCookie = configuredAppUrl
-  ? configuredAppUrl.startsWith("https://")
-  : process.env.NODE_ENV === "production";
-const cookieSameSite = isSecureCookie ? "none" : "lax";
+
+const oauth2Client = (googleClientId && googleClientSecret) 
+  ? new OAuth2Client(googleClientId, googleClientSecret) 
+  : null;
 
 const storage = gcsBucketName ? new Storage() : null;
 const bucket = storage ? storage.bucket(gcsBucketName) : null;
 
+if (oauth2Client) {
+  console.log("Google OAuth configured.");
+} else {
+  console.warn("Google OAuth NOT configured. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Secrets.");
+}
 if (bucket) {
   console.log(`Google Cloud Storage configured: ${gcsBucketName}`);
+} else {
+  console.log("Google Cloud Storage NOT configured. Local SQLite will be used for primary storage.");
 }
 
 // Initialize database
 try {
   db.exec(`
-  CREATE TABLE IF NOT EXISTS generations (
+    -- Ensure prompt_library is shared by default if needed, 
+    -- but we'll handle the sharing in the API routes.
+    CREATE TABLE IF NOT EXISTS generations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER DEFAULT 1,
     idea TEXT,
@@ -142,16 +152,6 @@ try {
     title TEXT,
     prompt TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS auth_users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL,
-    name TEXT,
-    picture TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   INSERT OR IGNORE INTO project_settings (id, name, brief, global_style) 
   VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist');
@@ -235,140 +235,13 @@ async function loadFromGCS(userId: string) {
   return JSON.parse(content.toString());
 }
 
-type SessionUser = {
-  id: string;
-  email: string;
-  name: string;
-  picture: string;
-};
-
-const DEFAULT_PROJECT = {
-  name: 'Main Workspace',
-  brief: 'Your primary creative environment.',
-  global_style: 'Modern, Clean, Minimalist'
-};
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
-function deriveUserId(email: string) {
-  return createHash('sha256').update(normalizeEmail(email)).digest('hex');
-}
-
-function getDisplayName(name: string | undefined, email: string) {
-  const trimmedName = name?.trim();
-  if (trimmedName) return trimmedName;
-  return normalizeEmail(email).split('@')[0] || 'Creator';
-}
-
-function getInitials(label: string) {
-  return label
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || '')
-    .join('') || 'U';
-}
-
-function createAvatarDataUrl(label: string) {
-  const initials = getInitials(label);
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#4f46e5" />
-          <stop offset="100%" stop-color="#7c3aed" />
-        </linearGradient>
-      </defs>
-      <rect width="96" height="96" rx="48" fill="url(#bg)" />
-      <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${initials}</text>
-    </svg>
-  `.trim();
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
-}
-
-function hashPassword(password: string, salt = randomBytes(16).toString('hex')) {
-  const hash = scryptSync(password, salt, 64).toString('hex');
-  return { salt, hash };
-}
-
-function verifyPassword(password: string, salt: string, expectedHash: string) {
-  const derived = scryptSync(password, salt, 64);
-  const expected = Buffer.from(expectedHash, 'hex');
-  return derived.length === expected.length && timingSafeEqual(derived, expected);
-}
-
-function createSessionUser(data: { id: string; email: string; name?: string | null; picture?: string | null }): SessionUser {
-  const email = normalizeEmail(data.email);
-  const name = getDisplayName(data.name || undefined, email);
-  return {
-    id: data.id,
-    email,
-    name,
-    picture: data.picture?.trim() || createAvatarDataUrl(name)
-  };
-}
-
-async function resolveUserIdForEmail(email: string) {
-  const normalizedEmail = normalizeEmail(email);
-  const localAccount = db.prepare("SELECT id FROM auth_users WHERE email = ?").get(normalizedEmail) as { id: string } | undefined;
-  if (localAccount?.id) {
-    return localAccount.id;
-  }
-
-  if (supabase) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', normalizedEmail)
-      .limit(1);
-
-    if (!error && data && data.length > 0 && data[0]?.id) {
-      return data[0].id;
-    }
-  }
-
-  return deriveUserId(normalizedEmail);
-}
-
-async function ensureUserWorkspace(user: SessionUser) {
-  if (supabase && user.id) {
-    await supabase.from('users').upsert({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      picture: user.picture
-    });
-
-    const { data: projects } = await supabase
-      .from('project_settings')
-      .select('id')
-      .eq('user_id', user.id)
-      .limit(1);
-
-    if (!projects || projects.length === 0) {
-      await supabase.from('project_settings').insert({
-        user_id: user.id,
-        ...DEFAULT_PROJECT
-      });
-    }
-  }
-
-  const existingLocalProject = db.prepare("SELECT id FROM project_settings WHERE user_id IS ? LIMIT 1").get(user.id);
-  if (!existingLocalProject) {
-    db.prepare("INSERT INTO project_settings (user_id, name, brief, global_style) VALUES (?, ?, ?, ?)")
-      .run(user.id, DEFAULT_PROJECT.name, DEFAULT_PROJECT.brief, DEFAULT_PROJECT.global_style);
-  }
-}
-
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
   
   if (!req.session?.user && !isGuestAllowed) {
     return res.status(401).json({ 
       error: "Unauthorized", 
-      details: "You must be signed in to perform this action. Please sign in with your email and password." 
+      details: "You must be signed in to perform this action. Please sign in with Google." 
     });
   }
   next();
@@ -393,10 +266,25 @@ async function uploadToSupabase(base64Data: string, bucketName: string, fileName
   }
 }
 
+// Helper to get the correct redirect URI
+const getRedirectUri = (req: express.Request) => {
+  // 1. Check for x-forwarded headers (common in proxies/Cloud Run/Render)
+  const protocol = req.get('x-forwarded-proto') || req.protocol;
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const detectedUrl = `${protocol}://${host}`;
+  
+  // 2. If APP_URL is set, we use it as the source of truth for the base domain
+  // But we allow it to be overridden by the detected URL if it's a valid public URL
+  // to support both dev and preview environments.
+  const baseUrl = process.env.APP_URL || detectedUrl;
+  
+  return `${baseUrl.replace(/\/$/, "")}/auth/callback`;
+};
+
 async function startServer() {
   try {
     const app = express();
-    const PORT = Number(process.env.PORT || 3000);
+    const PORT = 3000;
 
     app.set('trust proxy', 1);
     app.use(express.json({ limit: '50mb' }));
@@ -404,107 +292,129 @@ async function startServer() {
       name: 'session',
       keys: [sessionSecret],
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      secure: isSecureCookie,
-      sameSite: cookieSameSite,
-      httpOnly: true
+      secure: true,
+      sameSite: 'none'
     }));
 
   // Auth Routes
   app.get("/api/auth/debug", (req, res) => {
+    const redirectUri = getRedirectUri(req);
+    
     res.json({
-      authMode: 'email-password',
-      envAppUrl: configuredAppUrl || "NOT SET",
+      envAppUrl: process.env.APP_URL || "NOT SET",
       reqProtocol: req.protocol,
       reqHost: req.get('host'),
       xForwardedProto: req.get('x-forwarded-proto'),
-      secureCookie: isSecureCookie,
-      cookieSameSite,
-      gcsBucketConfigured: Boolean(gcsBucketName),
+      redirectUri,
+      googleClientId: googleClientId || "MISSING",
+      googleClientSecret: googleClientSecret ? "SET" : "MISSING",
       sessionSecret: sessionSecret === "prompt-studio-secret" ? "DEFAULT" : "CUSTOM"
     });
   });
 
-  app.post("/api/auth/signup", async (req, res) => {
-    try {
-      const email = normalizeEmail(String(req.body?.email || ''));
-      const password = String(req.body?.password || '');
-      const name = String(req.body?.name || '').trim();
-
-      if (!email || !email.includes('@')) {
-        return res.status(400).json({ error: 'Invalid email', details: 'Please enter a valid email address.' });
-      }
-
-      if (password.length < 8) {
-        return res.status(400).json({ error: 'Weak password', details: 'Password must be at least 8 characters long.' });
-      }
-
-      const existingAccount = db.prepare("SELECT id FROM auth_users WHERE email = ?").get(email);
-      if (existingAccount) {
-        return res.status(409).json({ error: 'Account exists', details: 'An account with that email already exists. Please sign in instead.' });
-      }
-
-      const userId = await resolveUserIdForEmail(email);
-      const sessionUser = createSessionUser({ id: userId, email, name });
-      const { hash, salt } = hashPassword(password);
-
-      db.prepare(`
-        INSERT INTO auth_users (id, email, password_hash, password_salt, name, picture, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `).run(sessionUser.id, sessionUser.email, hash, salt, sessionUser.name, sessionUser.picture);
-
-      if (req.session) {
-        req.session.user = sessionUser;
-      }
-
-      await ensureUserWorkspace(sessionUser);
-      res.status(201).json(sessionUser);
-    } catch (error) {
-      console.error('Signup failed:', error);
-      res.status(500).json({ error: 'Signup failed', details: 'Unable to create your account right now.' });
+  app.get("/api/auth/url", (req, res) => {
+    if (!oauth2Client) {
+      return res.status(500).json({ error: "Google OAuth not configured" });
     }
+    
+    const redirectUri = getRedirectUri(req);
+    
+    console.log("DEBUG: Generating Auth URL");
+    console.log("DEBUG: redirectUri:", redirectUri);
+    
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
+      redirect_uri: redirectUri
+    });
+    res.json({ url });
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.get("/auth/callback", async (req, res) => {
+    const { code } = req.query;
+    if (!oauth2Client || !code) {
+      return res.status(400).send("Invalid request");
+    }
+
     try {
-      const email = normalizeEmail(String(req.body?.email || ''));
-      const password = String(req.body?.password || '');
-
-      if (!email || !password) {
-        return res.status(400).json({ error: 'Missing credentials', details: 'Email and password are required.' });
-      }
-
-      const account = db.prepare("SELECT * FROM auth_users WHERE email = ?").get(email) as {
-        id: string;
-        email: string;
-        name?: string | null;
-        picture?: string | null;
-        password_hash: string;
-        password_salt: string;
-      } | undefined;
-
-      if (!account || !verifyPassword(password, account.password_salt, account.password_hash)) {
-        return res.status(401).json({ error: 'Invalid credentials', details: 'Invalid email or password.' });
-      }
-
-      const sessionUser = createSessionUser({
-        id: account.id,
-        email: account.email,
-        name: account.name,
-        picture: account.picture
+      const redirectUri = getRedirectUri(req);
+      
+      const { tokens } = await oauth2Client.getToken({
+        code: code as string,
+        redirect_uri: redirectUri
       });
+      oauth2Client.setCredentials(tokens);
 
-      db.prepare("UPDATE auth_users SET name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .run(sessionUser.name, sessionUser.picture, sessionUser.id);
+      const ticket = await oauth2Client.verifyIdToken({
+        idToken: tokens.id_token!,
+        audience: googleClientId,
+      });
+      const payload = ticket.getPayload();
 
       if (req.session) {
-        req.session.user = sessionUser;
+        req.session.user = {
+          id: payload?.sub,
+          email: payload?.email,
+          name: payload?.name,
+          picture: payload?.picture
+        };
       }
 
-      await ensureUserWorkspace(sessionUser);
-      res.json(sessionUser);
-    } catch (error) {
-      console.error('Login failed:', error);
-      res.status(500).json({ error: 'Login failed', details: 'Unable to sign in right now.' });
+      // Multi-user initialization
+      if (supabase && payload?.sub) {
+        // 1. Upsert user
+        await supabase.from('users').upsert({
+          id: payload.sub,
+          email: payload.email,
+          name: payload.name,
+          picture: payload.picture
+        });
+
+        // 2. Ensure default project exists for this user
+        const { data: projects } = await supabase
+          .from('project_settings')
+          .select('id')
+          .eq('user_id', payload.sub)
+          .limit(1);
+
+        if (!projects || projects.length === 0) {
+          await supabase.from('project_settings').insert({
+            user_id: payload.sub,
+            name: 'Main Workspace',
+            brief: 'Your primary creative environment.',
+            global_style: 'Modern, Clean, Minimalist'
+          });
+        }
+      }
+
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                window.close();
+              } else {
+                window.location.href = '/';
+              }
+            </script>
+            <p>Authentication successful. This window should close automatically.</p>
+          </body>
+        </html>
+      `);
+    } catch (error: any) {
+      console.error("OAuth callback error details:", error);
+      const message = error.message || "Authentication failed";
+      res.status(500).send(`
+        <html>
+          <body style="font-family: sans-serif; padding: 2rem; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 8px;">
+            <h2 style="margin-top: 0;">Authentication Failed</h2>
+            <p><strong>Error:</strong> ${message}</p>
+            <p style="font-size: 0.8rem; opacity: 0.8;">Check your Google Client ID and Secret in AI Studio Secrets. Also ensure your Redirect URI is correctly configured in the Google Cloud Console.</p>
+            <button onclick="window.close()" style="padding: 0.5rem 1rem; background: #721c24; color: white; border: none; border-radius: 4px; cursor: pointer;">Close Window</button>
+          </body>
+        </html>
+      `);
     }
   });
 
@@ -528,9 +438,29 @@ async function startServer() {
   `);
 
   // Global Search
-  app.get("/api/search", requireAuth, (req, res) => {
+  app.get("/api/search", requireAuth, async (req, res) => {
     const userId = req.session?.user?.id || null;
-    const query = `%${req.query.q || ''}%`;
+    const q = req.query.q as string || '';
+    const query = `%${q}%`;
+
+    if (supabase && userId) {
+      try {
+        const [generations, library, projects] = await Promise.all([
+          supabase.from('generations').select('*, project_settings(name)').or(`idea.ilike.%${q}%,prompt_json.ilike.%${q}%`).eq('user_id', userId),
+          supabase.from('prompt_library').select('*, project_settings(name)').or(`title.ilike.%${q}%,prompt.ilike.%${q}%`), // Shared library
+          supabase.from('project_settings').select('*').or(`name.ilike.%${q}%,brief.ilike.%${q}%`).eq('user_id', userId)
+        ]);
+
+        return res.json({
+          generations: generations.data?.map(g => ({ ...g, project_name: (g as any).project_settings?.name || 'Unknown Project' })) || [],
+          library: library.data?.map(l => ({ ...l, project_name: (l as any).project_settings?.name || 'Unknown Project' })) || [],
+          projects: projects.data || []
+        });
+      } catch (error) {
+        console.error("Supabase search failed:", error);
+      }
+    }
+
     const results = {
       generations: db.prepare(`
         SELECT g.*, COALESCE(p.name, 'Unknown Project') as project_name 
@@ -542,8 +472,8 @@ async function startServer() {
         SELECT l.*, COALESCE(p.name, 'Unknown Project') as project_name 
         FROM prompt_library l 
         LEFT JOIN project_settings p ON l.project_id = p.id 
-        WHERE (l.title LIKE ? OR l.prompt LIKE ?) AND l.user_id IS ?
-      `).all(query, query, userId),
+        WHERE (l.title LIKE ? OR l.prompt LIKE ?)
+      `).all(query, query),
       projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id IS ?").all(query, query, userId)
     };
     res.json(results);
@@ -1035,20 +965,21 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Prompt Library
+  // Prompt Library - SHARED across the agency
   app.get("/api/library", requireAuth, async (req, res) => {
     const userId = req.session?.user?.id || null;
     if (supabase && userId) {
+      // Shared library: remove user_id filter
       const { data, error } = await supabase
         .from('prompt_library')
         .select('*')
-        .eq('user_id', userId)
         .order('category', { ascending: true })
         .order('title', { ascending: true });
       if (error) return res.status(500).json({ error: error.message });
       return res.json(data);
     }
-    const rows = db.prepare("SELECT * FROM prompt_library WHERE user_id IS ? ORDER BY category ASC, title ASC").all(userId);
+    // Shared library: remove user_id filter
+    const rows = db.prepare("SELECT * FROM prompt_library ORDER BY category ASC, title ASC").all();
     res.json(rows);
   });
 
@@ -1087,10 +1018,10 @@ async function startServer() {
       return res.json({ success: true });
     }
 
-    const insert = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)");
+    const insert = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, 1)");
     const transaction = db.transaction((items) => {
       for (const item of items) {
-        insert.run(userId, item.category, item.title, item.prompt, 1);
+        insert.run(userId, item.category, item.title, item.prompt);
       }
     });
     transaction(items);

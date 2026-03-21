@@ -1,37 +1,8 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 
-const GEMINI_API_KEY_STORAGE_KEY = "promptstudio_gemini_api_key";
-
-const getStoredApiKey = () => {
-  if (typeof window === "undefined") return "";
-  try {
-    return window.localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY)?.trim() || "";
-  } catch {
-    return "";
-  }
-};
-
-const getConfiguredApiKey = () => {
-  const envApiKey = (process.env.API_KEY || process.env.GEMINI_API_KEY || "").trim();
-  return getStoredApiKey() || envApiKey;
-};
-
-export const hasConfiguredGeminiApiKey = () => Boolean(getConfiguredApiKey());
-
-export const saveGeminiApiKey = (apiKey: string) => {
-  if (typeof window === "undefined") return;
-  const normalized = apiKey.trim();
-  if (!normalized) return;
-  try {
-    window.localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, normalized);
-  } catch {
-    // Ignore storage failures and fall back to env-based configuration.
-  }
-};
-
 const getAI = () => {
-  const apiKey = getConfiguredApiKey();
-  if (!apiKey) throw new Error("Gemini API key is not set. Click Select API Key to paste one for this browser, or add GEMINI_API_KEY to your local env and restart.");
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Gemini API key is not set. Please select an API key.");
   return new GoogleGenAI({ apiKey });
 };
 
@@ -122,29 +93,19 @@ export const generateStructuredPrompt = async (
   return JSON.parse(response.text || "{}");
 };
 
-export const generateImage = async (
-  structuredPrompt: StructuredPrompt,
-  referenceImages?: string[],
-  variationIndex?: number,
-  totalVariations: number = 4
-): Promise<string> => {
+export const generateImage = async (structuredPrompt: StructuredPrompt, referenceImages?: string[]): Promise<string> => {
   const ai = getAI();
   
   // Construct the text prompt from JSON
-  const variationInstruction = typeof variationIndex === "number"
-    ? `Create variation ${variationIndex + 1} of ${totalVariations}. Keep the core subject and style direction consistent, but make this output visually distinct by varying composition, crop, pose, camera angle, framing, or background details.`
-    : null;
-
-  const fullPrompt = [
-    `Subject: ${structuredPrompt.prompt}`,
-    `Style: ${structuredPrompt.style}`,
-    `Lighting: ${structuredPrompt.lighting}`,
-    `Camera: ${structuredPrompt.camera?.lens}, ${structuredPrompt.camera?.depth_of_field}`,
-    `Composition: ${structuredPrompt.composition?.framing}, ${structuredPrompt.composition?.angle}`,
-    `Color Grading: ${structuredPrompt.color_grading}`,
-    `Negative Prompt: ${structuredPrompt.negative_prompt}`,
-    variationInstruction
-  ].filter(Boolean).join('\n');
+  const fullPrompt = `
+    Subject: ${structuredPrompt.prompt}
+    Style: ${structuredPrompt.style}
+    Lighting: ${structuredPrompt.lighting}
+    Camera: ${structuredPrompt.camera?.lens}, ${structuredPrompt.camera?.depth_of_field}
+    Composition: ${structuredPrompt.composition?.framing}, ${structuredPrompt.composition?.angle}
+    Color Grading: ${structuredPrompt.color_grading}
+    Negative Prompt: ${structuredPrompt.negative_prompt}
+  `.trim();
 
   const parts: any[] = [{ text: fullPrompt }];
 
