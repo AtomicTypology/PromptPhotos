@@ -93,141 +93,83 @@ if (bucket) {
   console.log("Google Cloud Storage NOT configured. Local SQLite will be used for primary storage.");
 }
 
-// Initialize database
+// Initialize database — single authoritative schema, all columns present from the start
 try {
   db.exec(`
-    -- Ensure prompt_library is shared by default if needed, 
-    -- but we'll handle the sharing in the API routes.
     CREATE TABLE IF NOT EXISTS generations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    idea TEXT,
-    prompt_json TEXT,
-    image_data TEXT,
-    parent_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS styles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    name TEXT,
-    style_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS palettes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    name TEXT,
-    image_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS references_images (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    name TEXT,
-    image_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS showcase (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    type TEXT, -- 'generation', 'palette', 'reference'
-    item_id INTEGER,
-    starred INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS comments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    showcase_id INTEGER,
-    text TEXT,
-    author TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS project_settings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    brief TEXT,
-    global_style TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS prompt_library (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER DEFAULT 1,
-    category TEXT,
-    title TEXT,
-    prompt TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  INSERT OR IGNORE INTO project_settings (id, name, brief, global_style) 
-  VALUES (1, 'Main Workspace', 'Your primary creative environment.', 'Modern, Clean, Minimalist');
-`);
-} catch (err) {
-  console.error("Database schema execution failed:", err);
-}
-
-// Add user_id and image_url columns to local DB for compatibility
-const tables = ['generations', 'styles', 'palettes', 'references_images', 'showcase', 'prompt_library', 'project_settings'];
-for (const table of tables) {
-  try {
-    db.prepare(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`).run();
-  } catch (e) { }
-}
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN image_url TEXT").run();
-} catch (e) { }
-try {
-  db.prepare("ALTER TABLE palettes ADD COLUMN image_url TEXT").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE palettes ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE references_images ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN feedback TEXT").run();
-} catch (e) { }
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN batch_id TEXT").run();
-} catch (e) { }
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN selected_references TEXT").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE palettes ADD COLUMN image_data TEXT").run();
-} catch (e) { }
-try {
-  db.prepare("ALTER TABLE references_images ADD COLUMN image_url TEXT").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE generations ADD COLUMN parent_id INTEGER").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE showcase ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE styles ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-try {
-  db.prepare("ALTER TABLE prompt_library ADD COLUMN project_id INTEGER DEFAULT 1").run();
-} catch (e) { }
-
-// Migrate: client_shares table for agency sharing
-try {
-  db.exec(`
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      idea TEXT,
+      prompt_json TEXT,
+      image_data TEXT,
+      image_url TEXT,
+      parent_id INTEGER,
+      feedback TEXT,
+      batch_id TEXT,
+      selected_references TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS styles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      name TEXT,
+      style_json TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS palettes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      name TEXT,
+      image_data TEXT,
+      image_url TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS references_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      name TEXT,
+      image_data TEXT,
+      image_url TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS showcase (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      type TEXT,
+      item_id INTEGER,
+      starred INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      showcase_id INTEGER,
+      text TEXT,
+      author TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS project_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      name TEXT,
+      brief TEXT,
+      global_style TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS prompt_library (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      project_id INTEGER DEFAULT 1,
+      category TEXT,
+      title TEXT,
+      prompt TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS client_shares (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT,
@@ -236,9 +178,41 @@ try {
       label TEXT,
       expires_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+    );
   `);
-} catch (e) { }
+  console.log("SQLite schema ready.");
+} catch (err) {
+  console.error("Database schema execution failed:", err);
+}
+
+// Migration: add any columns that may be missing from older DB files.
+// These silently no-op if the column already exists.
+const migrations = [
+  "ALTER TABLE generations ADD COLUMN user_id TEXT",
+  "ALTER TABLE generations ADD COLUMN image_url TEXT",
+  "ALTER TABLE generations ADD COLUMN feedback TEXT",
+  "ALTER TABLE generations ADD COLUMN batch_id TEXT",
+  "ALTER TABLE generations ADD COLUMN selected_references TEXT",
+  "ALTER TABLE generations ADD COLUMN parent_id INTEGER",
+  "ALTER TABLE generations ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE styles ADD COLUMN user_id TEXT",
+  "ALTER TABLE styles ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE palettes ADD COLUMN user_id TEXT",
+  "ALTER TABLE palettes ADD COLUMN image_url TEXT",
+  "ALTER TABLE palettes ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE references_images ADD COLUMN user_id TEXT",
+  "ALTER TABLE references_images ADD COLUMN image_url TEXT",
+  "ALTER TABLE references_images ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE showcase ADD COLUMN user_id TEXT",
+  "ALTER TABLE showcase ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE prompt_library ADD COLUMN user_id TEXT",
+  "ALTER TABLE prompt_library ADD COLUMN project_id INTEGER DEFAULT 1",
+  "ALTER TABLE project_settings ADD COLUMN user_id TEXT",
+  "ALTER TABLE client_shares ADD COLUMN user_id TEXT",
+];
+for (const sql of migrations) {
+  try { db.prepare(sql).run(); } catch (_) { /* column already exists — ok */ }
+}
 
 async function saveToGCS(userId: string, data: any) {
   if (!bucket) return;
@@ -260,50 +234,65 @@ async function loadFromGCS(userId: string) {
 }
 
 const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  try {
-    const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
+  // If not logged in, block the request immediately
+  const isGuestAllowed = req.method === 'GET' && !req.path.startsWith('/api/export');
+  if (!req.session?.user && !isGuestAllowed) {
+    return res.status(401).json({
+      error: "Unauthorized",
+      details: "You must be signed in. Please sign in with Google."
+    });
+  }
 
-    if (!req.session?.user && !isGuestAllowed) {
-      return res.status(401).json({
-        error: "Unauthorized",
-        details: "You must be signed in to perform this action. Please sign in with Google."
-      });
-    }
-
-    // For every write request by a logged-in user, guarantee the user row exists in
-    // Supabase before any insert/update that has a user_id FK reference. Without this,
-    // project creation and CSV imports throw FK violations when the upsert in the OAuth
-    // callback was missed (e.g., Supabase was unconfigured at first login).
-    if (req.session?.user && supabaseDb && req.method !== 'GET') {
-      const u = req.session.user;
+  // Best-effort: sync user row to Supabase. Never block the request if this fails.
+  if (req.session?.user && supabaseDb && req.method !== 'GET') {
+    const u = req.session.user;
+    try {
       await supabaseDb.from('users').upsert(
-        { id: u.id, email: u.email, name: u.name, picture: u.picture },
+        { id: u.id, email: u.email, name: u.name },
         { onConflict: 'id' }
       );
+    } catch (e) {
+      console.warn("Supabase user sync skipped (non-fatal):", (e as any)?.message || e);
     }
-
-    next();
-  } catch (err) {
-    next(err);
   }
+
+  next();
 };
 
 async function uploadToSupabase(base64Data: string, bucketName: string, fileName: string) {
   if (!supabaseAdmin) return null;
   try {
-    const buffer = Buffer.from(base64Data.split(',')[1], 'base64');
-    const { data, error } = await supabaseAdmin.storage
+    const base64Part = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+    const buffer = Buffer.from(base64Part, 'base64');
+    const mimeMatch = base64Data.match(/data:([^;]+);/);
+    const contentType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const { error } = await supabaseAdmin.storage
       .from(bucketName)
-      .upload(fileName, buffer, {
-        contentType: 'image/png',
-        upsert: true
-      });
+      .upload(fileName, buffer, { contentType, upsert: true });
     if (error) throw error;
     const { data: { publicUrl } } = supabaseAdmin.storage.from(bucketName).getPublicUrl(fileName);
     return publicUrl;
   } catch (error) {
     console.error("Supabase Storage upload failed:", error);
     return null;
+  }
+}
+
+async function ensureStorageBucket(bucketName: string) {
+  if (!supabaseAdmin) return;
+  try {
+    const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets();
+    if (listError) { console.error("Could not list Supabase buckets:", listError.message); return; }
+    const exists = buckets?.some((b: any) => b.name === bucketName);
+    if (!exists) {
+      const { error } = await supabaseAdmin.storage.createBucket(bucketName, { public: true });
+      if (error) console.error(`Failed to create bucket '${bucketName}':`, error.message);
+      else console.log(`✓ Created Supabase Storage bucket: ${bucketName} (public)`);
+    } else {
+      console.log(`✓ Supabase Storage bucket '${bucketName}' already exists.`);
+    }
+  } catch (err) {
+    console.error("ensureStorageBucket error:", err);
   }
 }
 
@@ -337,6 +326,11 @@ async function startServer() {
       secure: isProd,
       sameSite: isProd ? 'none' : 'lax'
     }));
+
+    // Ensure Supabase Storage bucket exists on startup
+    if (supabaseAdmin) {
+      ensureStorageBucket('promptphotos').catch(console.error);
+    }
 
     // Auth Routes
     app.get("/api/auth/debug", (req, res) => {
@@ -485,81 +479,70 @@ async function startServer() {
       const q = req.query.q as string || '';
       const query = `%${q}%`;
 
+      // Always search SQLite first — it's the source of truth locally
+      const results = {
+        generations: db.prepare(`
+          SELECT g.*, COALESCE(p.name, 'Unknown Project') as project_name
+          FROM generations g LEFT JOIN project_settings p ON g.project_id = p.id
+          WHERE (g.idea LIKE ? OR g.prompt_json LIKE ?) AND g.user_id IS ?
+        `).all(query, query, userId),
+        library: db.prepare(`
+          SELECT l.*, COALESCE(p.name, 'Unknown Project') as project_name
+          FROM prompt_library l LEFT JOIN project_settings p ON l.project_id = p.id
+          WHERE (l.title LIKE ? OR l.prompt LIKE ?)
+        `).all(query, query),
+        projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id IS ?").all(query, query, userId)
+      };
+      const hasLocalResults = (results.generations as any[]).length > 0 || (results.library as any[]).length > 0 || (results.projects as any[]).length > 0;
+      if (hasLocalResults) return res.json(results);
+
+      // Fall back to Supabase only if SQLite has nothing (Cloud Run scenario)
       if (supabaseDb && userId) {
         try {
           const [generations, library, projects] = await Promise.all([
             supabaseDb.from('generations').select('*, project_settings(name)').or(`idea.ilike.%${q}%,prompt_json.ilike.%${q}%`).eq('user_id', userId),
-            supabaseDb.from('prompt_library').select('*, project_settings(name)').or(`title.ilike.%${q}%,prompt.ilike.%${q}%`), // Shared library
+            supabaseDb.from('prompt_library').select('*, project_settings(name)').or(`title.ilike.%${q}%,prompt.ilike.%${q}%`),
             supabaseDb.from('project_settings').select('*').or(`name.ilike.%${q}%,brief.ilike.%${q}%`).eq('user_id', userId)
           ]);
-
           return res.json({
-            generations: generations.data?.map(g => ({ ...g, project_name: (g as any).project_settings?.name || 'Unknown Project' })) || [],
-            library: library.data?.map(l => ({ ...l, project_name: (l as any).project_settings?.name || 'Unknown Project' })) || [],
+            generations: generations.data?.map((g: any) => ({ ...g, project_name: g.project_settings?.name || 'Unknown Project' })) || [],
+            library: library.data?.map((l: any) => ({ ...l, project_name: l.project_settings?.name || 'Unknown Project' })) || [],
             projects: projects.data || []
           });
-        } catch (error) {
-          console.error("Supabase search failed:", error);
-        }
+        } catch (_) {}
       }
-
-      const results = {
-        generations: db.prepare(`
-        SELECT g.*, COALESCE(p.name, 'Unknown Project') as project_name 
-        FROM generations g 
-        LEFT JOIN project_settings p ON g.project_id = p.id 
-        WHERE (g.idea LIKE ? OR g.prompt_json LIKE ?) AND g.user_id IS ?
-      `).all(query, query, userId),
-        library: db.prepare(`
-        SELECT l.*, COALESCE(p.name, 'Unknown Project') as project_name 
-        FROM prompt_library l 
-        LEFT JOIN project_settings p ON l.project_id = p.id 
-        WHERE (l.title LIKE ? OR l.prompt LIKE ?)
-      `).all(query, query),
-        projects: db.prepare("SELECT * FROM project_settings WHERE (name LIKE ? OR brief LIKE ?) AND user_id IS ?").all(query, query, userId)
-      };
       res.json(results);
     });
 
     // Project Stats
     app.get("/api/projects/stats", requireAuth, async (req, res) => {
       const userId = req.session?.user?.id || null;
+      const localStats = db.prepare(`
+        SELECT p.id, p.name,
+          (SELECT COUNT(*) FROM generations WHERE project_id=p.id AND user_id IS ?) as generation_count,
+          (SELECT COUNT(*) FROM prompt_library WHERE project_id=p.id AND user_id IS ?) as library_count,
+          (SELECT COUNT(*) FROM references_images WHERE project_id=p.id AND user_id IS ?) as reference_count
+        FROM project_settings p WHERE p.user_id IS ?
+      `).all(userId, userId, userId, userId);
+      if ((localStats as any[]).length > 0) return res.json(localStats);
+
+      // Supabase fallback for Cloud Run
       if (supabaseDb && userId) {
-        const { data: stats, error } = await supabaseDb
-          .from('project_settings')
-          .select(`
-          id,
-          name,
-          generations:generations(count),
-          library:prompt_library(count),
-          references:references_images(count)
-        `)
-          .eq('user_id', userId);
-
-        if (error) return res.status(500).json({ error: error.message });
-
-        // Format Supabase response to match SQLite
-        const formattedStats = stats.map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          generation_count: s.generations?.[0]?.count || 0,
-          library_count: s.library?.[0]?.count || 0,
-          reference_count: s.references?.[0]?.count || 0
-        }));
-        return res.json(formattedStats);
+        try {
+          const { data: stats, error } = await supabaseDb.from('project_settings')
+            .select('id, name, generations:generations(count), library:prompt_library(count), references:references_images(count)')
+            .eq('user_id', userId);
+          if (!error && stats) {
+            return res.json(stats.map((s: any) => ({
+              id: s.id, name: s.name,
+              generation_count: s.generations?.[0]?.count || 0,
+              library_count: s.library?.[0]?.count || 0,
+              reference_count: s.references?.[0]?.count || 0
+            })));
+          }
+        } catch (_) {}
       }
-
-      const stats = db.prepare(`
-      SELECT 
-        p.id,
-        p.name,
-        (SELECT COUNT(*) FROM generations WHERE project_id = p.id AND user_id IS ?) as generation_count,
-        (SELECT COUNT(*) FROM prompt_library WHERE project_id = p.id AND user_id IS ?) as library_count,
-        (SELECT COUNT(*) FROM references_images WHERE project_id = p.id AND user_id IS ?) as reference_count
-      FROM project_settings p
-      WHERE p.user_id IS ?
-    `).all(userId, userId, userId, userId);
-      res.json(stats);
+      res.json([]);
     });
 
     // API Routes
@@ -568,25 +551,24 @@ async function startServer() {
       const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
 
+      // SQLite-first: always check local DB. Only fall back to Supabase if empty
+      // (this handles Cloud Run where SQLite resets on redeploy).
+      const localRows = db.prepare("SELECT * FROM generations WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
+      if (localRows.length > 0) return res.json(localRows);
+
       if (supabaseDb && userId) {
-        const { data, error } = await supabaseDb
-          .from('generations')
-          .select('*')
-          .eq('project_id', projectId)
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
-
-        if (error) return res.status(500).json({ error: error.message });
-        // Map image_url to image_data for frontend
-        const mapped = data.map((g: any) => ({
-          ...g,
-          image_data: g.image_url || g.image_data
-        }));
-        return res.json(mapped);
+        try {
+          const { data, error } = await supabaseDb
+            .from('generations').select('*')
+            .eq('project_id', projectId).eq('user_id', userId)
+            .order('created_at', { ascending: false });
+          if (!error && data) {
+            const mapped = data.map((g: any) => ({ ...g, image_data: g.image_url || g.image_data }));
+            return res.json(mapped);
+          }
+        } catch (_) {}
       }
-
-      const rows = db.prepare("SELECT * FROM generations WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
-      res.json(rows);
+      res.json([]);
     });
 
     app.post("/api/generations", requireAuth, async (req, res) => {
@@ -599,39 +581,40 @@ async function startServer() {
           return res.status(400).json({ error: "Missing image_data" });
         }
 
-        let imageUrl = null;
-        if (image_data.startsWith('data:image')) {
-          const fileName = `${userId}/gen_${Date.now()}.png`;
-          imageUrl = await uploadToSupabase(image_data, 'promptphotos', fileName);
-        }
-
-        if (supabaseDb) {
-          const { data, error } = await supabaseDb
-            .from('generations')
-            .insert([{
-              user_id: userId,
-              idea,
-              prompt_json,
-              image_url: imageUrl,
-              image_data: imageUrl ? null : image_data,
-              parent_id: parent_id || null,
-              project_id: project_id || 1,
-              feedback: feedback || null,
-              batch_id: batch_id || null,
-              selected_references: selected_references || null
-            }])
-            .select('id')
-            .single();
-
-          if (error) return res.status(500).json({ error: error.message });
-          return res.json({ id: data.id });
-        }
-
+        // SQLite-first: write immediately, return canonical SQLite ID
         const info = db.prepare(
           "INSERT INTO generations (user_id, idea, prompt_json, image_data, parent_id, project_id, feedback, batch_id, selected_references) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).run(userId, idea, prompt_json, image_data, parent_id || null, project_id || 1, feedback || null, batch_id || null, selected_references || null);
-
         res.json({ id: info.lastInsertRowid });
+
+        // Background sync to Supabase (fire-and-forget)
+        if (supabaseDb) {
+          (async () => {
+            try {
+              let imageUrl: string | null = null;
+              if (image_data.startsWith('data:image')) {
+                imageUrl = await uploadToSupabase(image_data, 'promptphotos', `${userId}/gen_${Date.now()}.png`);
+              }
+              const { error } = await supabaseDb!
+                .from('generations')
+                .insert([{
+                  user_id: userId, idea, prompt_json,
+                  image_url: imageUrl,
+                  image_data: imageUrl ? null : image_data,
+                  parent_id: parent_id || null,
+                  project_id: project_id || 1,
+                  feedback: feedback || null,
+                  batch_id: batch_id || null,
+                  selected_references: selected_references || null
+                }]);
+              if (error) console.error("Supabase generation sync failed:", error.message);
+              else if (imageUrl) {
+                // Update SQLite row with the cloud image_url for future reference
+                db.prepare("UPDATE generations SET image_url = ? WHERE rowid = ?").run(imageUrl, info.lastInsertRowid);
+              }
+            } catch (err) { console.error("Supabase generation sync error:", err); }
+          })();
+        }
       } catch (error) {
         console.error("Failed to save generation:", error);
         res.status(500).json({ error: "Internal server error saving generation", details: error instanceof Error ? error.message : String(error) });
@@ -641,36 +624,30 @@ async function startServer() {
     app.get("/api/styles", requireAuth, async (req, res) => {
       const userId = req.session?.user?.id || null;
       const projectId = parseInt(req.query.projectId as string) || 1;
+      const localRows = db.prepare("SELECT * FROM styles WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
+      if (localRows.length > 0) return res.json(localRows);
       if (supabaseDb && userId) {
-        const { data, error } = await supabaseDb
-          .from('styles')
-          .select('*')
-          .eq('project_id', projectId)
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json(data);
+        try {
+          const { data, error } = await supabaseDb.from('styles').select('*').eq('project_id', projectId).eq('user_id', userId).order('created_at', { ascending: false });
+          if (!error && data) return res.json(data);
+        } catch (_) {}
       }
-      const rows = db.prepare("SELECT * FROM styles WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
-      res.json(rows);
+      res.json([]);
     });
 
     app.post("/api/styles", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      const { name, style_json, project_id } = req.body;
-      if (supabaseDb) {
-        const { data, error } = await supabaseDb
-          .from('styles')
-          .insert([{ user_id: userId, name, style_json, project_id: project_id || 1 }])
-          .select('id')
-          .single();
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ id: data.id });
-      }
-      const info = db.prepare(
-        "INSERT INTO styles (user_id, name, style_json, project_id) VALUES (?, ?, ?, ?)"
-      ).run(userId, name, style_json, project_id || 1);
-      res.json({ id: info.lastInsertRowid });
+      try {
+        const userId = req.session.user.id;
+        const { name, style_json, project_id } = req.body;
+        // SQLite-first
+        const info = db.prepare("INSERT INTO styles (user_id, name, style_json, project_id) VALUES (?, ?, ?, ?)").run(userId, name, style_json, project_id || 1);
+        res.json({ id: info.lastInsertRowid });
+        if (supabaseDb) {
+          supabaseDb.from('styles').insert([{ user_id: userId, name, style_json, project_id: project_id || 1 }])
+            .then(({ error }: any) => { if (error) console.error("Supabase style sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase style sync error:", err));
+        }
+      } catch (error) { res.status(500).json({ error: "Failed to save style" }); }
     });
 
     // Palettes
@@ -678,22 +655,15 @@ async function startServer() {
       try {
         const userId = req.session?.user?.id || null;
         const projectId = parseInt(req.query.projectId as string) || 1;
+        const localRows = db.prepare("SELECT * FROM palettes WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
+        if (localRows.length > 0) return res.json(localRows);
         if (supabaseDb && userId) {
-          const { data, error } = await supabaseDb
-            .from('palettes')
-            .select('*')
-            .eq('project_id', projectId)
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false });
-          if (error) return res.status(500).json({ error: error.message });
-          const mapped = data.map((p: any) => ({
-            ...p,
-            image_data: p.image_url || p.image_data
-          }));
-          return res.json(mapped);
+          try {
+            const { data, error } = await supabaseDb.from('palettes').select('*').eq('project_id', projectId).eq('user_id', userId).order('created_at', { ascending: false });
+            if (!error && data) return res.json(data.map((p: any) => ({ ...p, image_data: p.image_url || p.image_data })));
+          } catch (_) {}
         }
-        const rows = db.prepare("SELECT * FROM palettes WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
-        res.json(rows);
+        res.json([]);
       } catch (error) {
         console.error("Error fetching palettes:", error);
         res.status(500).json({ error: "Failed to fetch palettes" });
@@ -704,30 +674,24 @@ async function startServer() {
       try {
         const userId = req.session.user.id;
         const { name, image_data, project_id } = req.body;
-
-        let imageUrl = null;
-        if (image_data && image_data.startsWith('data:image')) {
-          const fileName = `${userId}/pal_${Date.now()}.png`;
-          imageUrl = await uploadToSupabase(image_data, 'promptphotos', fileName);
-        }
-
-        if (supabaseDb) {
-          const { data, error } = await supabaseDb
-            .from('palettes')
-            .insert([{
-              user_id: userId,
-              name,
-              image_url: imageUrl,
-              image_data: imageUrl ? null : image_data,
-              project_id: project_id || 1
-            }])
-            .select('id')
-            .single();
-          if (error) return res.status(500).json({ error: error.message });
-          return res.json({ id: data.id });
-        }
+        // SQLite-first: write immediately, return canonical SQLite ID
         const info = db.prepare("INSERT INTO palettes (user_id, name, image_data, project_id) VALUES (?, ?, ?, ?)").run(userId, name, image_data, project_id || 1);
         res.json({ id: info.lastInsertRowid });
+        // Background sync to Supabase
+        if (supabaseDb) {
+          (async () => {
+            try {
+              let imageUrl: string | null = null;
+              if (image_data && image_data.startsWith('data:image')) {
+                imageUrl = await uploadToSupabase(image_data, 'promptphotos', `${userId}/pal_${Date.now()}.png`);
+              }
+              const { error } = await supabaseDb!.from('palettes')
+                .insert([{ user_id: userId, name, image_url: imageUrl, image_data: imageUrl ? null : image_data, project_id: project_id || 1 }]);
+              if (error) console.error("Supabase palette sync failed:", error.message);
+              else if (imageUrl) db.prepare("UPDATE palettes SET image_url = ? WHERE rowid = ?").run(imageUrl, info.lastInsertRowid);
+            } catch (err) { console.error("Supabase palette sync error:", err); }
+          })();
+        }
       } catch (error) {
         console.error("Error saving palette:", error);
         res.status(500).json({ error: "Failed to save palette" });
@@ -739,22 +703,15 @@ async function startServer() {
       try {
         const userId = req.session?.user?.id || null;
         const projectId = parseInt(req.query.projectId as string) || 1;
+        const localRows = db.prepare("SELECT * FROM references_images WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
+        if (localRows.length > 0) return res.json(localRows);
         if (supabaseDb && userId) {
-          const { data, error } = await supabaseDb
-            .from('references_images')
-            .select('*')
-            .eq('project_id', projectId)
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false });
-          if (error) return res.status(500).json({ error: error.message });
-          const mapped = data.map((r: any) => ({
-            ...r,
-            image_data: r.image_url || r.image_data
-          }));
-          return res.json(mapped);
+          try {
+            const { data, error } = await supabaseDb.from('references_images').select('*').eq('project_id', projectId).eq('user_id', userId).order('created_at', { ascending: false });
+            if (!error && data) return res.json(data.map((r: any) => ({ ...r, image_data: r.image_url || r.image_data })));
+          } catch (_) {}
         }
-        const rows = db.prepare("SELECT * FROM references_images WHERE project_id = ? AND user_id IS ? ORDER BY created_at DESC").all(projectId, userId);
-        res.json(rows);
+        res.json([]);
       } catch (error) {
         console.error("Error fetching references:", error);
         res.status(500).json({ error: "Failed to fetch references" });
@@ -765,30 +722,24 @@ async function startServer() {
       try {
         const userId = req.session.user.id;
         const { name, image_data, project_id } = req.body;
-
-        let imageUrl = null;
-        if (image_data && image_data.startsWith('data:image')) {
-          const fileName = `${userId}/ref_${Date.now()}.png`;
-          imageUrl = await uploadToSupabase(image_data, 'promptphotos', fileName);
-        }
-
-        if (supabaseDb) {
-          const { data, error } = await supabaseDb
-            .from('references_images')
-            .insert([{
-              user_id: userId,
-              name,
-              image_url: imageUrl,
-              image_data: imageUrl ? null : image_data,
-              project_id: project_id || 1
-            }])
-            .select('id')
-            .single();
-          if (error) return res.status(500).json({ error: error.message });
-          return res.json({ id: data.id });
-        }
-        const info = db.prepare("INSERT INTO references_images (user_id, name, image_url, image_data, project_id) VALUES (?, ?, ?, ?, ?)").run(userId, name, imageUrl, imageUrl ? null : image_data, project_id || 1);
+        // SQLite-first: write immediately, return canonical SQLite ID
+        const info = db.prepare("INSERT INTO references_images (user_id, name, image_data, project_id) VALUES (?, ?, ?, ?)").run(userId, name, image_data, project_id || 1);
         res.json({ id: info.lastInsertRowid });
+        // Background sync to Supabase
+        if (supabaseDb) {
+          (async () => {
+            try {
+              let imageUrl: string | null = null;
+              if (image_data && image_data.startsWith('data:image')) {
+                imageUrl = await uploadToSupabase(image_data, 'promptphotos', `${userId}/ref_${Date.now()}.png`);
+              }
+              const { error } = await supabaseDb!.from('references_images')
+                .insert([{ user_id: userId, name, image_url: imageUrl, image_data: imageUrl ? null : image_data, project_id: project_id || 1 }]);
+              if (error) console.error("Supabase reference sync failed:", error.message);
+              else if (imageUrl) db.prepare("UPDATE references_images SET image_url = ? WHERE rowid = ?").run(imageUrl, info.lastInsertRowid);
+            } catch (err) { console.error("Supabase reference sync error:", err); }
+          })();
+        }
       } catch (error) {
         console.error("Error saving reference:", error);
         res.status(500).json({ error: "Failed to save reference" });
@@ -800,59 +751,34 @@ async function startServer() {
       try {
         const userId = req.session?.user?.id || null;
         const projectId = parseInt(req.query.projectId as string) || 1;
+        const showcaseQuery = `
+          SELECT s.*,
+            CASE WHEN s.type='generation' THEN g.image_data WHEN s.type='reference' THEN r.image_data WHEN s.type='palette' THEN p.image_data ELSE NULL END as image_preview,
+            CASE WHEN s.type='generation' THEN g.idea WHEN s.type='reference' THEN r.name WHEN s.type='palette' THEN p.name END as title
+          FROM showcase s
+          LEFT JOIN generations g ON s.type='generation' AND s.item_id=g.id
+          LEFT JOIN references_images r ON s.type='reference' AND s.item_id=r.id
+          LEFT JOIN palettes p ON s.type='palette' AND s.item_id=p.id
+          WHERE s.project_id=? AND s.user_id IS ?
+          ORDER BY s.created_at DESC`;
+        const localRows = db.prepare(showcaseQuery).all(projectId, userId);
+        if (localRows.length > 0) return res.json(localRows);
+        // Supabase fallback (for Cloud Run)
         if (supabaseDb && userId) {
-          const { data: showcase, error } = await supabaseDb
-            .from('showcase')
-            .select(`
-            *,
-            generations (image_data, image_url, idea),
-            references_images (image_data, name),
-            palettes (image_data, image_url, name)
-          `)
-            .eq('project_id', projectId)
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false });
-
-          if (error) return res.status(500).json({ error: error.message });
-
-          const formatted = showcase.map((s: any) => {
-            let image_preview = null;
-            let title = null;
-            if (s.type === 'generation') {
-              image_preview = s.generations?.image_url || s.generations?.image_data;
-              title = s.generations?.idea;
-            } else if (s.type === 'reference') {
-              image_preview = s.references_images?.image_data;
-              title = s.references_images?.name;
-            } else if (s.type === 'palette') {
-              image_preview = s.palettes?.image_url || s.palettes?.image_data;
-              title = s.palettes?.name;
+          try {
+            const { data: showcase, error } = await supabaseDb.from('showcase')
+              .select('*, generations(image_data,image_url,idea), references_images(image_data,name), palettes(image_data,image_url,name)')
+              .eq('project_id', projectId).eq('user_id', userId).order('created_at', { ascending: false });
+            if (!error && showcase) {
+              return res.json(showcase.map((s: any) => ({
+                ...s,
+                image_preview: s.type === 'generation' ? (s.generations?.image_url || s.generations?.image_data) : s.type === 'reference' ? s.references_images?.image_data : (s.palettes?.image_url || s.palettes?.image_data),
+                title: s.type === 'generation' ? s.generations?.idea : s.type === 'reference' ? s.references_images?.name : s.palettes?.name
+              })));
             }
-            return { ...s, image_preview, title };
-          });
-          return res.json(formatted);
+          } catch (_) {}
         }
-        const rows = db.prepare(`
-        SELECT s.*, 
-               CASE 
-                 WHEN s.type = 'generation' THEN g.image_data
-                 WHEN s.type = 'reference' THEN r.image_data
-                 WHEN s.type = 'palette' THEN p.image_data
-                 ELSE NULL 
-               END as image_preview,
-               CASE 
-                 WHEN s.type = 'generation' THEN g.idea
-                 WHEN s.type = 'reference' THEN r.name
-                 WHEN s.type = 'palette' THEN p.name
-               END as title
-        FROM showcase s
-        LEFT JOIN generations g ON s.type = 'generation' AND s.item_id = g.id
-        LEFT JOIN references_images r ON s.type = 'reference' AND s.item_id = r.id
-        LEFT JOIN palettes p ON s.type = 'palette' AND s.item_id = p.id
-        WHERE s.project_id = ? AND s.user_id IS ?
-        ORDER BY s.created_at DESC
-      `).all(projectId, userId);
-        res.json(rows);
+        res.json([]);
       } catch (error) {
         console.error("Error fetching showcase:", error);
         res.status(500).json({ error: "Failed to fetch showcase" });
@@ -860,67 +786,60 @@ async function startServer() {
     });
 
     app.post("/api/showcase", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      const { type, item_id, project_id } = req.body;
-      if (supabaseDb) {
-        const { data, error } = await supabaseDb
-          .from('showcase')
-          .insert([{ user_id: userId, type, item_id, project_id: project_id || 1 }])
-          .select('id')
-          .single();
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ id: data.id });
-      }
-      const info = db.prepare("INSERT INTO showcase (user_id, type, item_id, project_id) VALUES (?, ?, ?, ?)").run(userId, type, item_id, project_id || 1);
-      res.json({ id: info.lastInsertRowid });
+      try {
+        const userId = req.session.user.id;
+        const { type, item_id, project_id } = req.body;
+        // SQLite-first
+        const info = db.prepare("INSERT INTO showcase (user_id, type, item_id, project_id) VALUES (?, ?, ?, ?)").run(userId, type, item_id, project_id || 1);
+        res.json({ id: info.lastInsertRowid });
+        if (supabaseDb) {
+          supabaseDb.from('showcase').insert([{ user_id: userId, type, item_id, project_id: project_id || 1 }])
+            .then(({ error }: any) => { if (error) console.error("Supabase showcase sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase showcase sync error:", err));
+        }
+      } catch (error) { res.status(500).json({ error: "Failed to add to showcase" }); }
     });
 
     app.post("/api/showcase/:id/star", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      if (supabaseDb) {
-        // Get current state
-        const { data: current } = await supabaseDb.from('showcase').select('starred').eq('id', req.params.id).eq('user_id', userId).single();
-        const { error } = await supabaseDb
-          .from('showcase')
-          .update({ starred: !current?.starred })
-          .eq('id', req.params.id)
-          .eq('user_id', userId);
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ success: true });
-      }
-      db.prepare("UPDATE showcase SET starred = 1 - starred WHERE id = ? AND user_id = ?").run(req.params.id, userId);
-      res.json({ success: true });
+      try {
+        const userId = req.session.user.id;
+        // Update SQLite first
+        db.prepare("UPDATE showcase SET starred = 1 - starred WHERE id = ? AND user_id = ?").run(req.params.id, userId);
+        res.json({ success: true });
+        // Background sync to Supabase
+        if (supabaseDb) {
+          const { data: current } = await supabaseDb.from('showcase').select('starred').eq('id', req.params.id).eq('user_id', userId).single();
+          supabaseDb.from('showcase').update({ starred: !current?.starred }).eq('id', req.params.id).eq('user_id', userId)
+            .then(({ error }: any) => { if (error) console.error("Supabase star sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase star sync error:", err));
+        }
+      } catch (error) { res.status(500).json({ error: "Failed to toggle star" }); }
     });
 
     // Comments
     app.get("/api/showcase/:id/comments", async (req, res) => {
+      const localRows = db.prepare("SELECT * FROM comments WHERE showcase_id = ? ORDER BY created_at ASC").all(req.params.id);
+      if (localRows.length > 0) return res.json(localRows);
       if (supabaseDb) {
-        const { data, error } = await supabaseDb
-          .from('comments')
-          .select('*')
-          .eq('showcase_id', req.params.id)
-          .order('created_at', { ascending: true });
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json(data);
+        try {
+          const { data, error } = await supabaseDb.from('comments').select('*').eq('showcase_id', req.params.id).order('created_at', { ascending: true });
+          if (!error && data) return res.json(data);
+        } catch (_) {}
       }
-      const rows = db.prepare("SELECT * FROM comments WHERE showcase_id = ? ORDER BY created_at ASC").all(req.params.id);
-      res.json(rows);
+      res.json([]);
     });
 
     app.post("/api/showcase/:id/comments", async (req, res) => {
       try {
         const { text, author } = req.body;
-        if (supabaseDb) {
-          const { data, error } = await supabaseDb
-            .from('comments')
-            .insert([{ showcase_id: req.params.id, text, author }])
-            .select('id')
-            .single();
-          if (error) return res.status(500).json({ error: error.message });
-          return res.json({ id: data.id });
-        }
+        // SQLite-first
         const info = db.prepare("INSERT INTO comments (showcase_id, text, author) VALUES (?, ?, ?)").run(req.params.id, text, author);
         res.json({ id: info.lastInsertRowid });
+        if (supabaseDb) {
+          supabaseDb.from('comments').insert([{ showcase_id: req.params.id, text, author }])
+            .then(({ error }: any) => { if (error) console.error("Supabase comment sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase comment sync error:", err));
+        }
       } catch (error) {
         console.error("Error adding comment:", error);
         res.status(500).json({ error: "Failed to add comment" });
@@ -931,17 +850,15 @@ async function startServer() {
     app.get("/api/projects", requireAuth, async (req, res) => {
       try {
         const userId = req.session?.user?.id || null;
+        const localRows = db.prepare("SELECT * FROM project_settings WHERE user_id IS ? ORDER BY updated_at DESC").all(userId);
+        if (localRows.length > 0) return res.json(localRows);
         if (supabaseDb && userId) {
-          const { data, error } = await supabaseDb
-            .from('project_settings')
-            .select('*')
-            .eq('user_id', userId)
-            .order('updated_at', { ascending: false });
-          if (error) throw error;
-          return res.json(data);
+          try {
+            const { data, error } = await supabaseDb.from('project_settings').select('*').eq('user_id', userId).order('updated_at', { ascending: false });
+            if (!error && data) return res.json(data);
+          } catch (_) {}
         }
-        const rows = db.prepare("SELECT * FROM project_settings WHERE user_id IS ? ORDER BY updated_at DESC").all(userId);
-        res.json(rows);
+        res.json([]);
       } catch (error) {
         console.error("Error fetching projects:", error);
         res.status(500).json({ error: "Failed to fetch projects" });
@@ -951,18 +868,15 @@ async function startServer() {
     app.get("/api/projects/:id", requireAuth, async (req, res) => {
       try {
         const userId = req.session?.user?.id || null;
+        const localRow = db.prepare("SELECT * FROM project_settings WHERE id = ? AND user_id IS ?").get(req.params.id, userId);
+        if (localRow) return res.json(localRow);
         if (supabaseDb && userId) {
-          const { data, error } = await supabaseDb
-            .from('project_settings')
-            .select('*')
-            .eq('id', req.params.id)
-            .eq('user_id', userId)
-            .maybeSingle();
-          if (error) throw error;
-          return res.json(data || null);
+          try {
+            const { data, error } = await supabaseDb.from('project_settings').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+            if (!error) return res.json(data || null);
+          } catch (_) {}
         }
-        const row = db.prepare("SELECT * FROM project_settings WHERE id = ? AND user_id IS ?").get(req.params.id, userId);
-        res.json(row || null);
+        res.json(null);
       } catch (error) {
         console.error("Error fetching project settings:", error);
         res.status(500).json({ error: "Failed to fetch project settings" });
@@ -973,18 +887,17 @@ async function startServer() {
       try {
         const userId = req.session.user.id;
         const { name, brief, global_style } = req.body;
-        if (supabaseDb) {
-          const { data, error } = await supabaseDb
-            .from('project_settings')
-            .insert([{ user_id: userId, name: name || 'New Project', brief: brief || '', global_style: global_style || '' }])
-            .select('id')
-            .single();
-          if (error) throw error;
-          return res.json({ id: data.id });
-        }
+        // SQLite-first: SQLite ID is the canonical ID used everywhere
         const info = db.prepare("INSERT INTO project_settings (user_id, name, brief, global_style) VALUES (?, ?, ?, ?)")
           .run(userId, name || 'New Project', brief || '', global_style || '');
         res.json({ id: info.lastInsertRowid });
+        // Background sync to Supabase (fire-and-forget)
+        if (supabaseDb) {
+          supabaseDb.from('project_settings')
+            .insert([{ user_id: userId, name: name || 'New Project', brief: brief || '', global_style: global_style || '' }])
+            .then(({ error }: any) => { if (error) console.error("Supabase project create sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase project create sync error:", err));
+        }
       } catch (error) {
         console.error("Error creating project:", error);
         res.status(500).json({ error: "Failed to create project" });
@@ -995,18 +908,16 @@ async function startServer() {
       try {
         const userId = req.session.user.id;
         const { name, brief, global_style } = req.body;
-        if (supabaseDb) {
-          const { error } = await supabaseDb
-            .from('project_settings')
-            .update({ name, brief, global_style, updated_at: new Date().toISOString() })
-            .eq('id', req.params.id)
-            .eq('user_id', userId);
-          if (error) throw error;
-          return res.json({ success: true });
-        }
+        // Update SQLite first — always succeeds
         db.prepare("UPDATE project_settings SET name = ?, brief = ?, global_style = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
           .run(name, brief, global_style, req.params.id, userId);
         res.json({ success: true });
+        // Background sync to Supabase
+        if (supabaseDb) {
+          supabaseDb.from('project_settings').update({ name, brief, global_style, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId)
+            .then(({ error }: any) => { if (error) console.error("Supabase project update sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase project update sync error:", err));
+        }
       } catch (error) {
         console.error("Error updating project settings:", error);
         res.status(500).json({ error: "Failed to update project settings" });
@@ -1015,87 +926,91 @@ async function startServer() {
 
     app.delete("/api/generations/:id", requireAuth, async (req, res) => {
       const userId = req.session.user.id;
-      if (supabaseDb) {
-        const { error } = await supabaseDb.from('generations').delete().eq('id', req.params.id).eq('user_id', userId);
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ success: true });
-      }
+      // Delete from SQLite first — always succeeds
       db.prepare("DELETE FROM generations WHERE id = ? AND user_id = ?").run(req.params.id, userId);
       res.json({ success: true });
+      // Background sync delete to Supabase
+      if (supabaseDb) {
+        supabaseDb.from('generations').delete().eq('id', req.params.id).eq('user_id', userId)
+          .then(({ error }: any) => { if (error) console.error("Supabase generation delete sync failed:", error.message); })
+          .catch((err: any) => console.error("Supabase generation delete sync error:", err));
+      }
     });
 
     // Prompt Library - SHARED across the agency
     app.get("/api/library", requireAuth, async (req, res) => {
-      const userId = req.session?.user?.id || null;
-      if (supabaseDb && userId) {
-        // Shared library: remove user_id filter
-        const { data, error } = await supabaseDb
-          .from('prompt_library')
-          .select('*')
-          .order('category', { ascending: true })
-          .order('title', { ascending: true });
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json(data);
+      // Shared library — no user_id filter; check SQLite first
+      const localRows = db.prepare("SELECT * FROM prompt_library ORDER BY category ASC, title ASC").all();
+      if (localRows.length > 0) return res.json(localRows);
+      if (supabaseDb) {
+        try {
+          const { data, error } = await supabaseDb.from('prompt_library').select('*').order('category', { ascending: true }).order('title', { ascending: true });
+          if (!error && data) return res.json(data);
+        } catch (_) {}
       }
-      // Shared library: remove user_id filter
-      const rows = db.prepare("SELECT * FROM prompt_library ORDER BY category ASC, title ASC").all();
-      res.json(rows);
+      res.json([]);
     });
 
     app.post("/api/library", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      const { category, title, prompt, project_id } = req.body;
-      if (supabaseDb) {
-        const { data, error } = await supabaseDb
-          .from('prompt_library')
-          .insert([{ user_id: userId, category, title, prompt, project_id: project_id || 1 }])
-          .select('id')
-          .single();
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ id: data.id });
-      }
-      const info = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)")
-        .run(userId, category, title, prompt, project_id || 1);
-      res.json({ id: info.lastInsertRowid });
+      try {
+        const userId = req.session.user.id;
+        const { category, title, prompt, project_id } = req.body;
+        if (supabaseDb) {
+          try {
+            const { data, error } = await supabaseDb.from('prompt_library')
+              .insert([{ user_id: userId, category, title, prompt, project_id: project_id || 1 }])
+              .select('id').single();
+            if (!error) {
+              try { db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)").run(userId, category, title, prompt, project_id || 1); } catch (_) {}
+              return res.json({ id: data.id });
+            }
+            console.error("Supabase library insert failed, using SQLite fallback:", error.message);
+          } catch (supaErr) { console.error("Supabase library write error, using SQLite fallback:", supaErr); }
+        }
+        const info = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)").run(userId, category, title, prompt, project_id || 1);
+        res.json({ id: info.lastInsertRowid });
+      } catch (error) { res.status(500).json({ error: "Failed to save library item" }); }
     });
 
     app.post("/api/library/import", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      const { items } = req.body;
+      try {
+        const userId = req.session.user.id;
+        const { items } = req.body;
 
-      if (supabaseDb) {
-        const { error } = await supabaseDb.from('prompt_library').insert(
-          items.map((item: any) => ({
-            user_id: userId,
-            category: item.category,
-            title: item.title,
-            prompt: item.prompt,
-            project_id: item.project_id || 1
-          }))
-        );
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ success: true });
-      }
+        // Always write to SQLite first — this is the guaranteed path
+        const insert = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)");
+        const transaction = db.transaction((items: any[]) => {
+          for (const item of items) {
+            insert.run(userId, item.category, item.title, item.prompt, item.project_id || 1);
+          }
+        });
+        transaction(items);
+        res.json({ success: true });
 
-      const insert = db.prepare("INSERT INTO prompt_library (user_id, category, title, prompt, project_id) VALUES (?, ?, ?, ?, ?)");
-      const transaction = db.transaction((items) => {
-        for (const item of items) {
-          insert.run(userId, item.category, item.title, item.prompt, item.project_id || 1);
+        // Background sync to Supabase
+        if (supabaseDb) {
+          supabaseDb.from('prompt_library').insert(
+            items.map((item: any) => ({ user_id: userId, category: item.category, title: item.title, prompt: item.prompt, project_id: item.project_id || 1 }))
+          ).then(({ error }: any) => { if (error) console.error("Supabase library import sync failed:", error.message); })
+            .catch((err: any) => console.error("Supabase library import sync error:", err));
         }
-      });
-      transaction(items);
-      res.json({ success: true });
+      } catch (error) {
+        console.error("Library import failed:", error);
+        res.status(500).json({ error: "Failed to import library items" });
+      }
     });
 
     app.delete("/api/library/:id", requireAuth, async (req, res) => {
       const userId = req.session.user.id;
-      if (supabaseDb) {
-        const { error } = await supabaseDb.from('prompt_library').delete().eq('id', req.params.id).eq('user_id', userId);
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ success: true });
-      }
+      // Delete from SQLite first — always succeeds
       db.prepare("DELETE FROM prompt_library WHERE id = ? AND user_id = ?").run(req.params.id, userId);
       res.json({ success: true });
+      // Background sync delete to Supabase
+      if (supabaseDb) {
+        supabaseDb.from('prompt_library').delete().eq('id', req.params.id).eq('user_id', userId)
+          .then(({ error }: any) => { if (error) console.error("Supabase library delete sync failed:", error.message); })
+          .catch((err: any) => console.error("Supabase library delete sync error:", err));
+      }
     });
 
     // Privacy: Purge Server Database
@@ -1254,36 +1169,40 @@ async function startServer() {
 
     // Create a share link
     app.post("/api/shares", requireAuth, async (req, res) => {
-      const userId = req.session.user.id;
-      const { project_id, label, expires_in_days } = req.body;
-      const token = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
-      const expires_at = expires_in_days
-        ? new Date(Date.now() + expires_in_days * 86400000).toISOString()
-        : null;
-      if (supabaseDb) {
-        const { data, error } = await supabaseDb
-          .from('client_shares')
-          .insert([{ user_id: userId, project_id, token, label: label || null, expires_at }])
-          .select('id, token').single();
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json(data);
-      }
-      const info = db.prepare(
-        "INSERT INTO client_shares (user_id, project_id, token, label, expires_at) VALUES (?, ?, ?, ?, ?)"
-      ).run(userId, project_id, token, label || null, expires_at);
-      res.json({ id: info.lastInsertRowid, token });
+      try {
+        const userId = req.session.user.id;
+        const { project_id, label, expires_in_days } = req.body;
+        const token = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+        const expires_at = expires_in_days ? new Date(Date.now() + expires_in_days * 86400000).toISOString() : null;
+        if (supabaseDb) {
+          try {
+            const { data, error } = await supabaseDb.from('client_shares')
+              .insert([{ user_id: userId, project_id, token, label: label || null, expires_at }])
+              .select('id, token').single();
+            if (!error) {
+              try { db.prepare("INSERT INTO client_shares (user_id, project_id, token, label, expires_at) VALUES (?, ?, ?, ?, ?)").run(userId, project_id, token, label || null, expires_at); } catch (_) {}
+              return res.json(data);
+            }
+            console.error("Supabase share create failed, using SQLite fallback:", error.message);
+          } catch (supaErr) { console.error("Supabase share create error, using SQLite fallback:", supaErr); }
+        }
+        const info = db.prepare("INSERT INTO client_shares (user_id, project_id, token, label, expires_at) VALUES (?, ?, ?, ?, ?)").run(userId, project_id, token, label || null, expires_at);
+        res.json({ id: info.lastInsertRowid, token });
+      } catch (error) { res.status(500).json({ error: "Failed to create share" }); }
     });
 
     // Delete a share
     app.delete("/api/shares/:id", requireAuth, async (req, res) => {
       const userId = req.session.user.id;
-      if (supabaseDb) {
-        const { error } = await supabaseDb.from('client_shares').delete().eq('id', req.params.id).eq('user_id', userId);
-        if (error) return res.status(500).json({ error: error.message });
-        return res.json({ success: true });
-      }
+      // Delete from SQLite first — always succeeds
       db.prepare("DELETE FROM client_shares WHERE id = ? AND user_id = ?").run(req.params.id, userId);
       res.json({ success: true });
+      // Background sync delete to Supabase
+      if (supabaseDb) {
+        supabaseDb.from('client_shares').delete().eq('id', req.params.id).eq('user_id', userId)
+          .then(({ error }: any) => { if (error) console.error("Supabase share delete sync failed:", error.message); })
+          .catch((err: any) => console.error("Supabase share delete sync error:", err));
+      }
     });
 
     // Public client view — no auth required, token-gated

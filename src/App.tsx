@@ -54,7 +54,7 @@ declare global {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project' | 'rescue'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'rescue'>('dashboard');
   const [idea, setIdea] = useState('');
   const [parentGeneration, setParentGeneration] = useState<Generation | null>(null);
   const [structuredPrompt, setStructuredPrompt] = useState<StructuredPrompt | null>(null);
@@ -77,6 +77,7 @@ export default function App() {
   const [rescueResult, setRescueResult] = useState<any>(null);
   const [browserBackupCount, setBrowserBackupCount] = useState(0);
   const [showBackupSuggestion, setShowBackupSuggestion] = useState(false);
+  const [showProjectIdentity, setShowProjectIdentity] = useState(false);
 
   // Browser Backup Logic
   const backupGenerationLocally = async (gen: Generation) => {
@@ -476,7 +477,6 @@ export default function App() {
       });
       await loadInitialData();
       setCurrentProjectId(res.id);
-      setActiveTab('project');
     } catch (error) {
       console.error(error);
     } finally {
@@ -940,7 +940,6 @@ export default function App() {
             { id: 'generate', icon: Plus, label: 'Create' },
             { id: 'library', icon: Library, label: 'Library' },
             { id: 'showcase', icon: FolderHeart, label: 'Showcase' },
-            { id: 'project', icon: Layers, label: 'Project' },
             { id: 'archive', icon: History, label: 'History' },
             { id: 'rescue', icon: LifeBuoy, label: 'Rescue Center' }
           ].map((tab) => (
@@ -1347,7 +1346,7 @@ export default function App() {
                         key={p.id}
                         onClick={() => {
                           setCurrentProjectId(p.id);
-                          setActiveTab('project');
+                          setActiveTab('moodboard');
                         }}
                         className="studio-card p-8 text-left hover:border-studio-accent transition-all group cursor-pointer"
                       >
@@ -1806,7 +1805,7 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === 'project' && project && (
+          {false && project && (
             <div className="space-y-10 max-w-3xl">
               <header>
                 <h1 className="text-4xl font-bold tracking-tight">Project Brief</h1>
@@ -2125,6 +2124,66 @@ export default function App() {
                   Start Creating
                 </button>
               </header>
+
+              {/* Collapsible Project Identity */}
+              {project && (
+                <div className="studio-card overflow-hidden">
+                  <button
+                    onClick={() => setShowProjectIdentity(v => !v)}
+                    className="w-full flex items-center justify-between px-6 py-4 hover:bg-studio-bg/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Layers className="w-4 h-4 text-studio-accent" />
+                      <span className="text-sm font-bold uppercase tracking-widest text-studio-secondary">Project Identity</span>
+                      {project.brief && project.brief !== 'Define your project brief here...' && (
+                        <span className="text-[10px] px-2 py-0.5 bg-studio-accent/10 text-studio-accent rounded-full font-semibold">Active</span>
+                      )}
+                    </div>
+                    <ChevronRight className={`w-4 h-4 text-studio-secondary transition-transform ${showProjectIdentity ? 'rotate-90' : ''}`} />
+                  </button>
+                  {showProjectIdentity && (
+                    <div className="px-6 pb-6 space-y-5 border-t border-studio-border/30 pt-5">
+                      <p className="text-xs text-studio-secondary">These fields are injected into every generation to keep your images on-brand. Skip them if you just want to create freely.</p>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Project Name</label>
+                        <input
+                          type="text"
+                          value={project.name}
+                          onChange={(e) => setProject({ ...project, name: e.target.value })}
+                          className="w-full studio-input"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Creative Brief</label>
+                        <textarea
+                          value={project.brief}
+                          onChange={(e) => setProject({ ...project, brief: e.target.value })}
+                          placeholder="What is the core objective and story?"
+                          className="w-full studio-input h-28 resize-none"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Global Visual Style</label>
+                        <input
+                          type="text"
+                          value={project.global_style}
+                          onChange={(e) => setProject({ ...project, global_style: e.target.value })}
+                          placeholder="e.g., Cinematic, Retro-Futuristic, High-Contrast Minimalist"
+                          className="w-full studio-input"
+                        />
+                        <p className="text-[10px] text-studio-secondary italic">Automatically integrated into every generation for visual consistency.</p>
+                      </div>
+                      <button
+                        onClick={handleUpdateProject}
+                        disabled={isSavingProject}
+                        className="studio-btn-primary w-full"
+                      >
+                        {isSavingProject ? 'Saving...' : 'Save Project Identity'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
                 {/* Visual Palettes */}
