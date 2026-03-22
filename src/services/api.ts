@@ -77,6 +77,25 @@ export interface AuthUser {
   picture: string;
 }
 
+export interface ClientShare {
+  id: number;
+  user_id: string;
+  project_id: number;
+  token: string;
+  label: string | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface SystemHealth {
+  sqlite: boolean;
+  supabase: boolean;
+  supabaseMode: 'service_role' | 'anon_key' | null;
+  supabaseError?: string;
+  gcs: boolean;
+  timestamp: string;
+}
+
 const handleResponse = async (res: Response) => {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -86,12 +105,12 @@ const handleResponse = async (res: Response) => {
     } catch (e) {
       errorData = { error: text || `Request failed with status ${res.status}` };
     }
-    
+
     // If it's a 401, we want to make sure the user knows they need to log in
     if (res.status === 401) {
       throw new Error(errorData.details || "Unauthorized: Please sign in to continue.");
     }
-    
+
     throw new Error(errorData.details || errorData.error || `Request failed with status ${res.status}`);
   }
   const text = await res.text();
@@ -276,5 +295,26 @@ export const api = {
   restoreFromGCS: async (): Promise<void> => {
     const res = await fetch("/api/restore", { method: "POST" });
     await handleResponse(res);
-  }
+  },
+  getHealth: async (): Promise<SystemHealth> => {
+    const res = await fetch("/api/health");
+    return handleResponse(res);
+  },
+  // Agency: client shares
+  getShares: async (): Promise<ClientShare[]> => {
+    const res = await fetch("/api/shares");
+    return handleResponse(res);
+  },
+  createShare: async (data: { project_id: number; label?: string; expires_in_days?: number }): Promise<{ id: number; token: string }> => {
+    const res = await fetch("/api/shares", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+  deleteShare: async (id: number): Promise<void> => {
+    const res = await fetch(`/api/shares/${id}`, { method: "DELETE" });
+    await handleResponse(res);
+  },
 };

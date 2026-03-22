@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Sparkles, 
-  Image as ImageIcon, 
-  History, 
-  Save, 
-  Trash2, 
-  Copy, 
+import {
+  Sparkles,
+  Image as ImageIcon,
+  History,
+  Save,
+  Trash2,
+  Copy,
   Plus,
   Palette,
   Star,
@@ -54,7 +54,7 @@ declare global {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'generate' | 'archive' | 'moodboard' | 'showcase' | 'library' | 'project' | 'rescue'>('dashboard');
   const [idea, setIdea] = useState('');
   const [parentGeneration, setParentGeneration] = useState<Generation | null>(null);
   const [structuredPrompt, setStructuredPrompt] = useState<StructuredPrompt | null>(null);
@@ -62,7 +62,7 @@ export default function App() {
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
-  
+
   const [history, setHistory] = useState<Generation[]>([]);
   const [palettes, setPalettes] = useState<PaletteType[]>([]);
   const [references, setReferences] = useState<ReferenceImage[]>([]);
@@ -118,7 +118,7 @@ export default function App() {
           console.error('Failed to restore individual generation:', e);
         }
       }
-      
+
       alert(`Successfully restored ${restoredCount} images from your browser's local storage.`);
       await loadData();
     } catch (err) {
@@ -137,7 +137,6 @@ export default function App() {
     checkBackup();
   }, []);
   const [showDebug, setShowDebug] = useState(false);
-  const [beachArtFound, setBeachArtFound] = useState<any>(null);
   const [currentProjectId, setCurrentProjectId] = useState<number>(() => {
     const saved = localStorage.getItem('promptstudio_current_project_id');
     return saved ? Number(saved) : 1;
@@ -154,16 +153,16 @@ export default function App() {
 
   const [isGeneratingMoodboard, setIsGeneratingMoodboard] = useState(false);
   const [vibeInput, setVibeInput] = useState('');
-  
+
   const [isCritiquing, setIsCritiquing] = useState(false);
   const [critiqueResult, setCritiqueResult] = useState<Critique | null>(null);
   const [selectedForCritique, setSelectedForCritique] = useState<Generation | null>(null);
-  
+
   const [selectedReferences, setSelectedReferences] = useState<number[]>([]);
   const [batchResults, setBatchResults] = useState<Generation[]>([]);
   const [feedback, setFeedback] = useState('');
   const [isRefining, setIsRefining] = useState(false);
-  
+
   const [selectedShowcaseItem, setSelectedShowcaseItem] = useState<ShowcaseItem | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
@@ -213,7 +212,7 @@ export default function App() {
     try {
       const { url } = await api.getAuthUrl();
       const authWindow = window.open(url, 'google_oauth', 'width=600,height=700');
-      
+
       if (!authWindow) {
         alert('Please allow popups to sign in with Google');
         return;
@@ -265,7 +264,7 @@ export default function App() {
   const handleRestoreFromGCS = async () => {
     if (!user) return;
     if (!confirm("This will overwrite your current local workspace with the backup from Google Cloud. Proceed?")) return;
-    
+
     setIsRestoring(true);
     try {
       await api.restoreFromGCS();
@@ -294,30 +293,6 @@ export default function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [hasBrowserBackup, setHasBrowserBackup] = useState(false);
   const [lastBackupDate, setLastBackupDate] = useState<string | null>(null);
-  const [storageMode, setStorageMode] = useState<'local' | 'cloud'>(() => {
-    const saved = localStorage.getItem('promptstudio_storage_mode');
-    return (saved as any) || 'local';
-  });
-
-  const toggleStorageMode = () => {
-    const newMode = storageMode === 'local' ? 'cloud' : 'local';
-    setStorageMode(newMode);
-    localStorage.setItem('promptstudio_storage_mode', newMode);
-    alert(`Storage mode switched to ${newMode.toUpperCase()}. ${newMode === 'local' ? 'Data will now stay in your browser.' : 'Data will sync to the server database.'}`);
-  };
-
-  const purgeServerCache = async () => {
-    if (confirm("PRIVACY ALERT: This will permanently delete all projects and history from the cloud server. Your browser backup will remain safe. Proceed?")) {
-      try {
-        await api.purgeServer();
-        alert("Server database purged. Your workspace is now local-only.");
-        window.location.reload();
-      } catch (error) {
-        alert("Failed to purge server.");
-      }
-    }
-  };
-
   const saveToBrowserBackup = async () => {
     try {
       const data = await api.exportWorkspace();
@@ -338,12 +313,12 @@ export default function App() {
       if (backup && date) {
         setHasBrowserBackup(true);
         setLastBackupDate(date);
-        
+
         // If the current database is essentially empty (only 1 project with default name), 
         // offer to restore the backup automatically.
         const stats = await api.getProjectStats();
         const totalGenerations = stats.reduce((acc, s) => acc + (s.generation_count || 0), 0);
-        
+
         if (totalGenerations === 0 && stats.length <= 1) {
           if (confirm(`Welcome back! We found a local backup from ${new Date(date).toLocaleString()}. Would you like to restore your workspace?`)) {
             await api.importWorkspace(backup);
@@ -406,13 +381,7 @@ export default function App() {
     ]);
     setProjects(projs);
     setProjectStats(stats);
-    
-    // Check for beach art specifically to answer user
-    const beachResults = await api.globalSearch('beach');
-    if (beachResults.generations.length > 0 || beachResults.library.length > 0) {
-      setBeachArtFound(beachResults);
-    }
-    
+
     const savedId = localStorage.getItem('promptstudio_current_project_id');
     if (savedId) {
       const id = Number(savedId);
@@ -426,13 +395,13 @@ export default function App() {
     if (projs.length > 0) {
       setCurrentProjectId(projs[0].id);
       const initialGens = await api.getGenerations(projs[0].id);
-      
+
       // If server is empty but browser has backup, suggest rescue
       const backup: Generation[] = await get('browser_generations') || [];
       if (initialGens.length === 0 && backup.length > 0) {
         setShowBackupSuggestion(true);
       }
-      
+
       loadProjectData(projs[0].id);
     }
   };
@@ -521,13 +490,13 @@ export default function App() {
     try {
       const parentPrompt = parentGeneration ? JSON.parse(parentGeneration.prompt_json) : undefined;
       const prompt = await generateStructuredPrompt(
-        idea, 
-        project ? { brief: project.brief, global_style: project.global_style } : undefined, 
+        idea,
+        project ? { brief: project.brief, global_style: project.global_style } : undefined,
         parentPrompt,
         feedback
       );
       setStructuredPrompt(prompt);
-      
+
       if (autoDevelop) {
         await handleGenerateImage(prompt);
       }
@@ -567,7 +536,7 @@ export default function App() {
             batch_id: batchId,
             selected_references: JSON.stringify(selectedReferences)
           });
-          
+
           const newGen = {
             id: res.id,
             idea,
@@ -583,7 +552,7 @@ export default function App() {
 
           // Save to browser backup immediately
           await backupGenerationLocally(newGen);
-          
+
           return newGen;
         } catch (err) {
           console.error(`Error generating image ${idx + 1}:`, err);
@@ -592,7 +561,7 @@ export default function App() {
       });
 
       const results = (await Promise.all(generationPromises)).filter((r): r is Generation => r !== null);
-      
+
       if (results.length > 0) {
         setBatchResults(results);
         setGeneratedImage(results[0].image_data);
@@ -625,41 +594,68 @@ export default function App() {
 
   const [isUploading, setIsUploading] = useState(false);
 
+  const compressImage = (file: File, maxSizeMB: number = 0.8): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          const maxDim = 1200;
+          if (width > height && width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+
+          let quality = 0.9;
+          let dataUrl = canvas.toDataURL('image/jpeg', quality);
+
+          // Approx 1.37 bytes per base64 char
+          while (dataUrl.length > maxSizeMB * 1024 * 1024 * 1.37 && quality > 0.3) {
+            quality -= 0.1;
+            dataUrl = canvas.toDataURL('image/jpeg', quality);
+          }
+          resolve(dataUrl);
+        };
+        img.onerror = (err) => reject(err);
+      };
+      reader.onerror = (err) => reject(err);
+    });
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'reference' | 'palette') => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
-    // Check file size (e.g., limit to 5MB for safety)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File is too large. Please upload an image smaller than 5MB.');
-      return;
-    }
 
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const base64 = reader.result as string;
-        if (type === 'reference') {
-          await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId });
-        } else {
-          await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId });
-        }
-        await loadData();
-      } catch (error) {
-        console.error('Upload failed:', error);
-        alert('Failed to upload image. Please try again.');
-      } finally {
-        setIsUploading(false);
-        // Clear the input so the same file can be uploaded again if needed
-        e.target.value = '';
+    try {
+      const base64 = await compressImage(file);
+      if (type === 'reference') {
+        await api.saveReference({ name: file.name, image_data: base64, project_id: currentProjectId || 1 });
+      } else {
+        await api.savePalette({ name: file.name, image_data: base64, project_id: currentProjectId || 1 });
       }
-    };
-    reader.onerror = () => {
-      alert('Error reading file.');
+      await loadData();
+    } catch (error) {
+      console.error('Upload failed:', error);
+      alert('Failed to upload image. Please try again.');
+    } finally {
       setIsUploading(false);
-    };
-    reader.readAsDataURL(file);
+      e.target.value = '';
+    }
   };
 
   const addToShowcase = async (type: string, item_id: number) => {
@@ -678,7 +674,7 @@ export default function App() {
         category: 'Generations',
         title: gen.idea,
         prompt: gen.idea, // Or maybe the structured prompt? The library prompt is usually text.
-        project_id: 1 // Default to global project 1
+        project_id: currentProjectId || 1
       });
       alert('Saved to Library!');
       loadData();
@@ -708,16 +704,16 @@ export default function App() {
       // Save the generated palette
       const paletteImage = `https://picsum.photos/seed/${mood.palette.name}/800/450`;
       await api.savePalette({ name: mood.palette.name, image_data: paletteImage, project_id: currentProjectId });
-      
+
       // Save reference prompts to library
       const libraryItems = mood.reference_prompts.map(p => ({
         category: 'Moodboard',
         title: mood.palette.name,
         prompt: p,
-        project_id: 1
+        project_id: currentProjectId || 1
       }));
       await api.importLibrary(libraryItems);
-      
+
       setVibeInput('');
       loadData();
       alert('Mood Board generated! Check your Palettes and Library.');
@@ -751,6 +747,31 @@ export default function App() {
     setSelectedForCritique(null);
   };
 
+  // RFC 4180-compliant CSV parser — handles commas and newlines inside quoted fields
+  const parseCSVRows = (text: string): string[][] => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = '';
+    let inQuotes = false;
+    const src = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (inQuotes) {
+        if (ch === '"' && src[i + 1] === '"') { field += '"'; i++; }
+        else if (ch === '"') { inQuotes = false; }
+        else { field += ch; }
+      } else {
+        if (ch === '"') { inQuotes = true; }
+        else if (ch === ',') { row.push(field); field = ''; }
+        else if (ch === '\n') { row.push(field); field = ''; rows.push(row); row = []; }
+        else { field += ch; }
+      }
+    }
+    row.push(field);
+    if (row.some(f => f.trim())) rows.push(row);
+    return rows;
+  };
+
   const handleCSVImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -758,30 +779,29 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = async (event) => {
       const text = event.target?.result as string;
-      const lines = text.split('\n');
-      const items: Omit<PromptLibraryItem, "id" | "created_at">[] = [];
-      
-      // Basic CSV parsing (Category, Title, Prompt)
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        
-        // Handle quotes in CSV
-        const parts = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-        if (parts && parts.length >= 3) {
-          items.push({
-            category: parts[0].replace(/"/g, ''),
-            title: parts[1].replace(/"/g, ''),
-            prompt: parts[2].replace(/"/g, ''),
-            project_id: 1
-          });
-        }
+      const allRows = parseCSVRows(text);
+      const items: any[] = [];
+
+      // Skip header row (row 0)
+      for (let i = 1; i < allRows.length; i++) {
+        const cols = allRows[i];
+        if (cols.length < 3) continue;
+        const [cat, title, prompt] = cols.map(c => c.trim());
+        if (!cat && !title && !prompt) continue;
+        items.push({ category: cat, title: title, prompt: prompt, project_id: currentProjectId || 1 });
       }
 
       if (items.length > 0) {
-        await api.importLibrary(items);
-        loadData();
-        alert(`Imported ${items.length} prompts.`);
+        try {
+          await api.importLibrary(items);
+          loadData();
+          alert(`Imported ${items.length} prompts.`);
+        } catch (err) {
+          console.error(err);
+          alert('Failed to import some or all prompts. Check the server logs.');
+        }
+      } else {
+        alert('No valid rows found in CSV. Expected columns: Category, Title, Prompt');
       }
     };
     reader.readAsText(file);
@@ -792,14 +812,14 @@ export default function App() {
       alert("Library is empty.");
       return;
     }
-    
+
     const headers = ["Category", "Title", "Prompt"];
     const rows = library.map(item => [
       `"${item.category.replace(/"/g, '""')}"`,
       `"${item.title.replace(/"/g, '""')}"`,
       `"${item.prompt.replace(/"/g, '""')}"`
     ]);
-    
+
     const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -861,10 +881,10 @@ export default function App() {
 
   if (!user && !isGuest) {
     return (
-      <LandingPage 
-        onLogin={handleLogin} 
-        isLoggingIn={isLoggingIn} 
-        onContinueAsGuest={() => setIsGuest(true)} 
+      <LandingPage
+        onLogin={handleLogin}
+        isLoggingIn={isLoggingIn}
+        onContinueAsGuest={() => setIsGuest(true)}
       />
     );
   }
@@ -885,7 +905,7 @@ export default function App() {
                   I noticed your server database is empty, but you have <strong>{browserBackupCount} images</strong> saved in this browser.
                 </p>
                 <div className="flex gap-3 pt-1">
-                  <button 
+                  <button
                     onClick={() => {
                       setActiveTab('rescue');
                       setShowBackupSuggestion(false);
@@ -894,7 +914,7 @@ export default function App() {
                   >
                     Go to Rescue Center
                   </button>
-                  <button 
+                  <button
                     onClick={() => setShowBackupSuggestion(false)}
                     className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary hover:text-studio-text"
                   >
@@ -912,7 +932,7 @@ export default function App() {
         <div className="w-10 h-10 bg-studio-accent rounded-2xl flex items-center justify-center mb-0 md:mb-6 shadow-lg shadow-studio-accent/20">
           <Layers className="w-6 h-6 text-white" />
         </div>
-        
+
         <div className="flex flex-row md:flex-col items-center gap-4 md:gap-6 flex-1">
           {[
             { id: 'dashboard', icon: LayoutGrid, label: 'Dashboard' },
@@ -924,7 +944,7 @@ export default function App() {
             { id: 'archive', icon: History, label: 'History' },
             { id: 'rescue', icon: LifeBuoy, label: 'Rescue Center' }
           ].map((tab) => (
-            <button 
+            <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
               className={`p-3 rounded-2xl transition-all relative ${activeTab === tab.id ? 'bg-studio-accent text-white shadow-md' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-text'}`}
@@ -941,7 +961,7 @@ export default function App() {
         </div>
 
         <div className="mt-auto pt-6 border-t border-studio-border/30 w-full flex flex-col items-center gap-4">
-          <button 
+          <button
             onClick={handleExport}
             disabled={isExporting}
             className="p-3 rounded-2xl text-studio-secondary hover:bg-studio-bg hover:text-studio-accent transition-all"
@@ -949,10 +969,10 @@ export default function App() {
           >
             <Download className="w-6 h-6" />
           </button>
-          
+
           {user ? (
             <div className="flex flex-col items-center gap-4">
-              <button 
+              <button
                 onClick={handleSyncToGCS}
                 disabled={isSyncing}
                 className={`p-3 rounded-2xl transition-all ${isSyncing ? 'animate-pulse text-studio-accent' : 'text-studio-secondary hover:bg-studio-bg hover:text-studio-accent'}`}
@@ -960,7 +980,7 @@ export default function App() {
               >
                 <CloudUpload className="w-6 h-6" />
               </button>
-              <button 
+              <button
                 onClick={handleLogout}
                 className="p-3 rounded-2xl text-studio-secondary hover:bg-studio-bg hover:text-red-500 transition-all"
                 title="Logout"
@@ -977,7 +997,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <button 
+            <button
               onClick={handleLogin}
               disabled={isLoggingIn}
               className="w-10 h-10 rounded-full bg-studio-bg border border-studio-border/50 flex items-center justify-center overflow-hidden hover:border-studio-accent transition-colors"
@@ -998,13 +1018,13 @@ export default function App() {
             <div className="flex items-center gap-3">
               <AlertCircle className="w-5 h-5" />
               <p className="text-sm font-medium">
-                High-quality image generation requires a Gemini API key. 
+                High-quality image generation requires a Gemini API key.
                 <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline ml-1 hover:text-white/80">
                   Learn about billing
                 </a>
               </p>
             </div>
-            <button 
+            <button
               onClick={handleSelectKey}
               className="bg-white text-studio-accent px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-white/90 transition-colors"
             >
@@ -1013,13 +1033,13 @@ export default function App() {
           </div>
         )}
         <div className="max-w-7xl mx-auto p-6 md:p-12">
-          
+
           {/* Project Switcher Bar */}
           <div className="mb-8 flex items-center justify-between bg-studio-card p-4 rounded-2xl border border-studio-border/30 shadow-sm">
             <div className="flex items-center gap-4">
               <div className="flex flex-col">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary">Active Project</span>
-                <select 
+                <select
                   value={currentProjectId}
                   onChange={(e) => setCurrentProjectId(Number(e.target.value))}
                   className="bg-transparent font-bold text-lg focus:outline-none cursor-pointer"
@@ -1030,7 +1050,7 @@ export default function App() {
                 </select>
               </div>
             </div>
-            <button 
+            <button
               onClick={handleCreateProject}
               disabled={isCreatingProject}
               className="studio-btn-secondary flex items-center gap-2 text-xs py-2"
@@ -1069,7 +1089,7 @@ export default function App() {
 
               {/* Quick Start Actions */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div 
+                <div
                   onClick={() => setActiveTab('moodboard')}
                   className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
                 >
@@ -1081,8 +1101,8 @@ export default function App() {
                     <p className="text-xs text-studio-secondary mt-1">Upload references and define your visual direction.</p>
                   </div>
                 </div>
-                
-                <div 
+
+                <div
                   onClick={() => setActiveTab('generate')}
                   className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
                 >
@@ -1095,7 +1115,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div 
+                <div
                   onClick={() => setActiveTab('showcase')}
                   className="studio-card p-6 flex flex-col gap-4 cursor-pointer hover:border-studio-accent transition-all group"
                 >
@@ -1111,32 +1131,10 @@ export default function App() {
 
               {/* Global Search Bar */}
               <div className="max-w-2xl mx-auto w-full space-y-4">
-                {beachArtFound && !searchResults && (
-                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between animate-in fade-in zoom-in duration-500">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-white">
-                        <CheckCircle2 className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-emerald-900">Beach Art Found!</p>
-                        <p className="text-[10px] text-emerald-700">I found {beachArtFound.generations.length} images and {beachArtFound.library.length} prompts related to "beach".</p>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => {
-                        setSearchQuery('beach');
-                        setSearchResults(beachArtFound);
-                      }}
-                      className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 hover:text-emerald-800"
-                    >
-                      View Results
-                    </button>
-                  </div>
-                )}
                 <form onSubmit={handleSearch} className="relative group">
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-studio-secondary group-focus-within:text-studio-accent transition-colors" />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search across all projects (e.g., 'beach art')..."
@@ -1236,18 +1234,18 @@ export default function App() {
                     <History className="w-5 h-5 text-studio-accent" />
                     Recent Generations
                   </h2>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('archive')}
                     className="text-xs text-studio-secondary font-bold uppercase tracking-widest hover:text-studio-accent"
                   >
                     View All Archive
                   </button>
                 </div>
-                
+
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                   {history.slice(0, 6).map(item => (
-                    <div 
-                      key={item.id} 
+                    <div
+                      key={item.id}
                       className="studio-card group cursor-pointer overflow-hidden"
                       onClick={() => {
                         setGeneratedImage(item.image_data);
@@ -1287,16 +1285,16 @@ export default function App() {
                       <p className="text-xs text-studio-secondary">If your data seems missing after an update, use this to re-link it to your Main Workspace.</p>
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center gap-4">
-                    <button 
+                    <button
                       onClick={handleRescue}
                       disabled={isRescuing}
                       className="studio-btn-primary text-xs py-2 px-6"
                     >
                       {isRescuing ? 'Scanning Database...' : 'Run Data Rescue'}
                     </button>
-                    <button 
+                    <button
                       onClick={() => setShowDebug(!showDebug)}
                       className="text-xs text-studio-secondary font-bold uppercase tracking-widest hover:text-studio-accent"
                     >
@@ -1345,8 +1343,8 @@ export default function App() {
                   {projects.map(p => {
                     const stats = projectStats.find(s => s.id === p.id);
                     return (
-                      <div 
-                        key={p.id} 
+                      <div
+                        key={p.id}
                         onClick={() => {
                           setCurrentProjectId(p.id);
                           setActiveTab('project');
@@ -1361,7 +1359,7 @@ export default function App() {
                             {currentProjectId === p.id && (
                               <span className="text-[10px] bg-studio-accent text-white px-2 py-1 rounded-full font-bold uppercase tracking-widest">Active</span>
                             )}
-                            <button 
+                            <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setEditingProjectId(p.id);
@@ -1375,8 +1373,8 @@ export default function App() {
                         </div>
                         {editingProjectId === p.id ? (
                           <div className="mb-4 flex gap-2" onClick={e => e.stopPropagation()}>
-                            <input 
-                              type="text" 
+                            <input
+                              type="text"
                               value={editProjectName}
                               onChange={e => setEditProjectName(e.target.value)}
                               className="studio-input py-1 text-sm flex-1"
@@ -1389,7 +1387,7 @@ export default function App() {
                           <h3 className="text-xl font-bold mb-2">{p.name}</h3>
                         )}
                         <p className="text-sm text-studio-secondary line-clamp-2 mb-6">{p.brief || 'No brief defined.'}</p>
-                        
+
                         <div className="flex items-center gap-4 mb-6">
                           <div className="flex items-center gap-1 text-[10px] font-bold text-studio-secondary uppercase">
                             <Sparkles className="w-3 h-3" /> {stats?.generation_count || 0}
@@ -1408,7 +1406,7 @@ export default function App() {
                       </div>
                     );
                   })}
-                  <button 
+                  <button
                     onClick={handleCreateProject}
                     className="studio-card p-8 border-dashed flex flex-col items-center justify-center text-studio-secondary hover:border-studio-accent hover:text-studio-accent transition-all"
                   >
@@ -1430,7 +1428,7 @@ export default function App() {
                 </div>
                 <h1 className="text-4xl font-bold tracking-tight">Rescue Center</h1>
                 <p className="text-studio-secondary max-w-lg mx-auto">
-                  Cloud Run environments are ephemeral, meaning the server's local database can reset. 
+                  Cloud Run environments are ephemeral, meaning the server's local database can reset.
                   Use these tools to recover your data from browser backups or server rescue points.
                 </p>
               </header>
@@ -1460,11 +1458,11 @@ export default function App() {
                   </div>
 
                   <p className="text-xs text-studio-secondary leading-relaxed">
-                    Every time you generate an image, we save a copy to your browser's local storage. 
+                    Every time you generate an image, we save a copy to your browser's local storage.
                     If the server resets, you can push these back to the database.
                   </p>
 
-                  <button 
+                  <button
                     onClick={restoreFromBrowser}
                     disabled={isRescuing || browserBackupCount === 0}
                     className="w-full studio-btn-primary flex items-center justify-center gap-2 py-4"
@@ -1501,7 +1499,7 @@ export default function App() {
                     </p>
                   </div>
 
-                  <button 
+                  <button
                     onClick={handleRescue}
                     disabled={isRescuing}
                     className="w-full py-4 border border-studio-border rounded-2xl font-bold text-sm hover:bg-studio-bg transition-colors flex items-center justify-center gap-2"
@@ -1523,7 +1521,7 @@ export default function App() {
                 <div className="space-y-1">
                   <p className="text-sm font-bold text-amber-900">Pro Tip: Use Supabase for Persistence</p>
                   <p className="text-xs text-amber-800 leading-relaxed">
-                    To stop losing data permanently, connect a Supabase database in the AI Studio Settings. 
+                    To stop losing data permanently, connect a Supabase database in the AI Studio Settings.
                     This will replace the ephemeral local database with a persistent Postgres instance.
                   </p>
                 </div>
@@ -1544,8 +1542,8 @@ export default function App() {
                       </div>
                     )}
                     <div className="h-8 w-[1px] bg-studio-border/30 mx-2 hidden md:block"></div>
-                    <select 
-                      value={currentProjectId || ''} 
+                    <select
+                      value={currentProjectId || ''}
                       onChange={(e) => setCurrentProjectId(Number(e.target.value))}
                       className="bg-studio-bg border-none text-studio-accent font-bold text-sm uppercase tracking-widest focus:ring-0 cursor-pointer hover:underline p-0"
                     >
@@ -1556,7 +1554,7 @@ export default function App() {
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="text-studio-secondary">Transform concepts into visual assets.</p>
-                    <button 
+                    <button
                       onClick={() => setActiveTab('moodboard')}
                       className="text-[10px] text-studio-accent font-bold hover:underline flex items-center gap-1"
                     >
@@ -1566,7 +1564,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex gap-2 w-full md:w-auto">
-                  <button 
+                  <button
                     onClick={() => {
                       setIdea('');
                       setParentGeneration(null);
@@ -1607,7 +1605,7 @@ export default function App() {
                     <div className="space-y-2">
                       <div className="flex justify-between items-center">
                         <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Concept Idea</label>
-                        <button 
+                        <button
                           onClick={() => setActiveTab('library')}
                           className="text-[10px] text-studio-accent font-bold hover:underline flex items-center gap-1"
                         >
@@ -1615,7 +1613,7 @@ export default function App() {
                           From Library
                         </button>
                       </div>
-                      <textarea 
+                      <textarea
                         value={idea}
                         onChange={(e) => setIdea(e.target.value)}
                         placeholder="Describe the visual essence..."
@@ -1627,7 +1625,7 @@ export default function App() {
                       <div className="space-y-2">
                         <div className="flex justify-between items-center">
                           <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Refinement Feedback</label>
-                          <button 
+                          <button
                             onClick={() => {
                               setParentGeneration(null);
                               setFeedback('');
@@ -1637,7 +1635,7 @@ export default function App() {
                             Cancel Refinement
                           </button>
                         </div>
-                        <textarea 
+                        <textarea
                           value={feedback}
                           onChange={(e) => setFeedback(e.target.value)}
                           placeholder="What would you like to change? (e.g., 'Make it moodier', 'Add more blue')"
@@ -1653,13 +1651,12 @@ export default function App() {
                           <button
                             key={ref.id}
                             onClick={() => {
-                              setSelectedReferences(prev => 
+                              setSelectedReferences(prev =>
                                 prev.includes(ref.id) ? prev.filter(id => id !== ref.id) : [...prev, ref.id]
                               );
                             }}
-                            className={`relative w-12 h-12 rounded-lg overflow-hidden border-2 transition-all ${
-                              selectedReferences.includes(ref.id) ? 'border-studio-accent scale-110' : 'border-transparent opacity-60'
-                            }`}
+                            className={`relative w-12 h-12 rounded-lg overflow-hidden border-2 transition-all ${selectedReferences.includes(ref.id) ? 'border-studio-accent scale-110' : 'border-transparent opacity-60'
+                              }`}
                           >
                             <img src={ref.image_data} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                             {selectedReferences.includes(ref.id) && (
@@ -1669,7 +1666,7 @@ export default function App() {
                             )}
                           </button>
                         ))}
-                        <button 
+                        <button
                           onClick={() => refUploadRef.current?.click()}
                           className="w-12 h-12 rounded-lg border-2 border-dashed border-studio-border flex items-center justify-center text-studio-secondary hover:border-studio-accent hover:text-studio-accent transition-all"
                         >
@@ -1679,9 +1676,9 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <input 
-                        type="checkbox" 
-                        id="autoDevelop" 
+                      <input
+                        type="checkbox"
+                        id="autoDevelop"
                         checked={autoDevelop}
                         onChange={(e) => setAutoDevelop(e.target.checked)}
                         className="w-4 h-4 accent-studio-accent"
@@ -1689,7 +1686,7 @@ export default function App() {
                       <label htmlFor="autoDevelop" className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary cursor-pointer">Auto-Develop Visuals</label>
                     </div>
 
-                    <button 
+                    <button
                       onClick={handleGeneratePrompt}
                       disabled={isGeneratingPrompt || !idea}
                       className="studio-btn-primary w-full flex items-center justify-center gap-2"
@@ -1715,7 +1712,7 @@ export default function App() {
                           <p className="font-medium truncate">{structuredPrompt.lighting}</p>
                         </div>
                       </div>
-                      <button 
+                      <button
                         onClick={() => handleGenerateImage()}
                         disabled={isGeneratingImage}
                         className="studio-btn-primary bg-studio-text w-full"
@@ -1738,7 +1735,7 @@ export default function App() {
                       <div className="w-full h-full relative group">
                         <img src={generatedImage} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                         <div className="absolute bottom-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
+                          <button
                             onClick={() => {
                               const gen = batchResults.find(r => r.image_data === generatedImage) || history.find(r => r.image_data === generatedImage);
                               if (gen) handleRefine(gen);
@@ -1767,28 +1764,28 @@ export default function App() {
                       <div className="grid grid-cols-4 gap-4">
                         {batchResults.map((res, idx) => (
                           <div key={res.id} className="group relative aspect-square rounded-xl overflow-hidden bg-studio-card border border-studio-border/30 shadow-sm">
-                            <img 
-                              src={res.image_data} 
-                              className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500" 
+                            <img
+                              src={res.image_data}
+                              className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500"
                               onClick={() => setGeneratedImage(res.image_data)}
                               referrerPolicy="no-referrer"
                             />
                             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
-                              <button 
+                              <button
                                 onClick={() => handleRefine(res)}
                                 className="p-2 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                                 title="Refine this version"
                               >
                                 <Wand2 className="w-4 h-4" />
                               </button>
-                              <button 
+                              <button
                                 onClick={() => addToShowcase('generation', res.id)}
                                 className="p-2 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                                 title="Save to Gallery"
                               >
                                 <FolderHeart className="w-4 h-4" />
                               </button>
-                              <button 
+                              <button
                                 onClick={() => saveToLibrary(res)}
                                 className="p-2 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                                 title="Save to Library"
@@ -1820,19 +1817,19 @@ export default function App() {
                 <div className="studio-card p-10 space-y-8">
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Project Name</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={project.name}
-                      onChange={(e) => setProject({...project, name: e.target.value})}
+                      onChange={(e) => setProject({ ...project, name: e.target.value })}
                       className="w-full studio-input"
                     />
                   </div>
 
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Creative Brief</label>
-                    <textarea 
+                    <textarea
                       value={project.brief}
-                      onChange={(e) => setProject({...project, brief: e.target.value})}
+                      onChange={(e) => setProject({ ...project, brief: e.target.value })}
                       placeholder="What is the core objective and story?"
                       className="w-full studio-input h-40 resize-none"
                     />
@@ -1840,17 +1837,17 @@ export default function App() {
 
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Global Visual Style</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={project.global_style}
-                      onChange={(e) => setProject({...project, global_style: e.target.value})}
+                      onChange={(e) => setProject({ ...project, global_style: e.target.value })}
                       placeholder="e.g., Cinematic, Retro-Futuristic, High-Contrast Minimalist"
                       className="w-full studio-input"
                     />
                     <p className="text-[10px] text-studio-secondary italic">This style will be automatically integrated into every generation to ensure consistency.</p>
                   </div>
 
-                  <button 
+                  <button
                     onClick={handleUpdateProject}
                     disabled={isSavingProject}
                     className="studio-btn-primary w-full"
@@ -1872,7 +1869,7 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                    <button 
+                    <button
                       onClick={() => setActiveTab('archive')}
                       className="text-xs text-studio-accent font-bold uppercase tracking-widest"
                     >
@@ -1891,11 +1888,11 @@ export default function App() {
                       <p className="text-xs text-studio-secondary">Generate a complete project identity from a single vibe.</p>
                     </div>
                   </div>
-                  
+
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase tracking-widest text-studio-secondary">Describe the Vibe</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={vibeInput}
                       onChange={(e) => setVibeInput(e.target.value)}
                       placeholder="e.g., A rainy Tuesday in 1980s Tokyo..."
@@ -1903,7 +1900,7 @@ export default function App() {
                     />
                   </div>
 
-                  <button 
+                  <button
                     onClick={handleGenerateMoodboard}
                     disabled={isGeneratingMoodboard || !vibeInput}
                     className="studio-btn-secondary w-full border-studio-accent text-studio-accent hover:bg-studio-accent hover:text-white"
@@ -1916,23 +1913,23 @@ export default function App() {
                 <div className="studio-card p-10 space-y-6">
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold">Project Assets</h3>
-                    <button 
+                    <button
                       onClick={() => setActiveTab('moodboard')}
                       className="text-xs text-studio-accent font-bold hover:underline"
                     >
                       View All
                     </button>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-3">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary">Linked Palettes</p>
                       <div className="flex -space-x-2 overflow-hidden">
                         {palettes.slice(0, 5).map(p => (
-                          <img 
-                            key={p.id} 
-                            src={p.image_data} 
-                            className="inline-block h-10 w-10 rounded-full ring-2 ring-white object-cover" 
+                          <img
+                            key={p.id}
+                            src={p.image_data}
+                            className="inline-block h-10 w-10 rounded-full ring-2 ring-white object-cover"
                             referrerPolicy="no-referrer"
                           />
                         ))}
@@ -1944,15 +1941,15 @@ export default function App() {
                         {palettes.length === 0 && <p className="text-xs text-studio-secondary italic">None yet</p>}
                       </div>
                     </div>
-                    
+
                     <div className="space-y-3">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary">Linked References</p>
                       <div className="flex -space-x-2 overflow-hidden">
                         {references.slice(0, 5).map(r => (
-                          <img 
-                            key={r.id} 
-                            src={r.image_data} 
-                            className="inline-block h-10 w-10 rounded-full ring-2 ring-white object-cover" 
+                          <img
+                            key={r.id}
+                            src={r.image_data}
+                            className="inline-block h-10 w-10 rounded-full ring-2 ring-white object-cover"
                             referrerPolicy="no-referrer"
                           />
                         ))}
@@ -1978,14 +1975,14 @@ export default function App() {
                   <p className="text-studio-secondary mt-1">Your categorized collection of creative starters.</p>
                 </div>
                 <div className="flex gap-2">
-                  <button 
+                  <button
                     onClick={handleCSVExport}
                     className="studio-btn-secondary flex items-center gap-2"
                   >
                     <Copy className="w-4 h-4" />
                     Export CSV
                   </button>
-                  <button 
+                  <button
                     onClick={() => csvUploadRef.current?.click()}
                     className="studio-btn-secondary flex items-center gap-2"
                   >
@@ -2003,7 +2000,7 @@ export default function App() {
                       <span className="text-[10px] bg-studio-bg px-2 py-1 rounded-md font-bold text-studio-accent uppercase tracking-widest">
                         {item.category}
                       </span>
-                      <button 
+                      <button
                         onClick={() => api.deleteLibraryItem(item.id).then(loadData)}
                         className="p-1 text-studio-secondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
@@ -2014,7 +2011,7 @@ export default function App() {
                       <h3 className="font-bold">{item.title}</h3>
                       <p className="text-sm text-studio-secondary mt-2 line-clamp-3 italic">"{item.prompt}"</p>
                     </div>
-                    <button 
+                    <button
                       onClick={() => {
                         setIdea(item.prompt);
                         setParentGeneration(null);
@@ -2060,28 +2057,28 @@ export default function App() {
                     <div className="aspect-square bg-studio-bg relative overflow-hidden">
                       <img src={item.image_data} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" referrerPolicy="no-referrer" />
                       <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                        <button 
+                        <button
                           onClick={() => handleBranch(item)}
                           className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                           title="Rework & Iterate"
                         >
                           <GitBranch className="w-5 h-5" />
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleCritique(item)}
                           className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                           title="AI Critique"
                         >
                           <Wand2 className="w-5 h-5" />
                         </button>
-                        <button 
+                        <button
                           onClick={() => addToShowcase('generation', item.id)}
                           className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                           title="Pin to Showcase"
                         >
                           <FolderHeart className="w-5 h-5" />
                         </button>
-                        <button 
+                        <button
                           onClick={() => saveToLibrary(item)}
                           className="p-3 bg-white rounded-full shadow-lg hover:bg-studio-accent hover:text-white transition-all"
                           title="Save Prompt to Library"
@@ -2117,7 +2114,7 @@ export default function App() {
                   <h1 className="text-4xl font-bold tracking-tight">Mood Board</h1>
                   <p className="text-studio-secondary mt-1">Visual references and color inspiration.</p>
                 </div>
-                <button 
+                <button
                   onClick={() => {
                     setSelectedReferences(references.map(r => r.id));
                     setActiveTab('generate');
@@ -2137,7 +2134,7 @@ export default function App() {
                       <Palette className="w-5 h-5 text-studio-accent" />
                       Visual Palettes
                     </h2>
-                    <button 
+                    <button
                       onClick={() => paletteUploadRef.current?.click()}
                       disabled={isUploading}
                       className={`text-studio-accent text-sm font-semibold hover:underline ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -2151,7 +2148,7 @@ export default function App() {
                       <div key={p.id} className="studio-card group relative aspect-video">
                         <img src={p.image_data} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                          <button 
+                          <button
                             onClick={() => addToShowcase('palette', p.id)}
                             className="studio-btn-primary text-xs py-2"
                           >
@@ -2178,7 +2175,7 @@ export default function App() {
                       <ImageIcon className="w-5 h-5 text-studio-accent" />
                       Style References
                     </h2>
-                    <button 
+                    <button
                       onClick={() => refUploadRef.current?.click()}
                       disabled={isUploading}
                       className={`text-studio-accent text-sm font-semibold hover:underline ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -2192,7 +2189,7 @@ export default function App() {
                       <div key={ref.id} className="studio-card group relative aspect-square">
                         <img src={ref.image_data} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                          <button 
+                          <button
                             onClick={() => addToShowcase('reference', ref.id)}
                             className="studio-btn-primary text-xs py-2"
                           >
@@ -2222,7 +2219,7 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                 {showcase.map(item => (
                   <div key={item.id} className="studio-card flex flex-col group">
-                    <div 
+                    <div
                       className="aspect-[4/3] bg-studio-bg relative overflow-hidden cursor-pointer"
                       onClick={() => openShowcaseDetail(item)}
                     >
@@ -2238,13 +2235,13 @@ export default function App() {
                         <p className="text-[10px] text-studio-secondary uppercase tracking-widest">{item.type}</p>
                       </div>
                       <div className="flex gap-2">
-                        <button 
+                        <button
                           onClick={() => toggleStar(item.id)}
                           className={`p-2 rounded-full border transition-all ${item.starred ? 'bg-yellow-400 border-yellow-400 text-white' : 'border-studio-border text-studio-secondary hover:bg-studio-bg'}`}
                         >
                           <Star className={`w-4 h-4 ${item.starred ? 'fill-current' : ''}`} />
                         </button>
-                        <button 
+                        <button
                           onClick={() => openShowcaseDetail(item)}
                           className="p-2 rounded-full border border-studio-border text-studio-secondary hover:bg-studio-bg"
                         >
@@ -2285,7 +2282,7 @@ export default function App() {
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              
+
               <div className="flex-1 overflow-y-auto p-8 space-y-6 no-scrollbar">
                 {selectedShowcaseItem.type === 'generation' && (
                   <div className="space-y-6">
@@ -2297,7 +2294,7 @@ export default function App() {
                         </div>
                       </div>
                     )}
-                    
+
                     {getGenerationForItem(selectedShowcaseItem)?.selected_references && (
                       <div className="space-y-2">
                         <h4 className="text-[10px] font-bold uppercase tracking-widest text-studio-secondary">Visual Context</h4>
@@ -2335,16 +2332,16 @@ export default function App() {
 
               <div className="p-8 border-t border-studio-border/30 space-y-4">
                 <div className="flex gap-2">
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={authorName}
                     onChange={(e) => setAuthorName(e.target.value)}
                     placeholder="Your Role"
                     className="studio-input py-2 text-xs w-24"
                   />
                   <div className="flex-1 relative">
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                       placeholder="Add a comment..."
@@ -2375,7 +2372,7 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
               <div className="aspect-video rounded-xl overflow-hidden bg-studio-bg">
                 <img src={selectedForCritique.image_data} className="w-full h-full object-cover" />
@@ -2414,7 +2411,7 @@ export default function App() {
                   </div>
 
                   <div className="pt-4">
-                    <button 
+                    <button
                       onClick={applyCritique}
                       className="studio-btn-primary w-full flex items-center justify-center gap-2"
                     >
